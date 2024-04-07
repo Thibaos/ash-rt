@@ -1,0 +1,18 @@
+[package]
+name = "ash-rt"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ash = { version = "0.37.3", default-features = false, features = [
+    "linked",
+    "debug",
+] }
+ash-window = "0.12"
+winit = { version = "0.27" }
+png = "0.17"
+image = "0.24"
+raw-window-handle = "0.5"
+
+[build-dependencies]
+spirv-builder = "0.9"
