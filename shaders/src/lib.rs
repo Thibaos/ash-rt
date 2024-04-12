@@ -2,7 +2,7 @@
 
 use spirv_std::{
     arch::report_intersection,
-    glam::{uvec2, vec2, vec3, vec4, UVec3, Vec2, Vec3, Vec4},
+    glam::{uvec2, vec2, vec3, vec4, UVec3, Vec2, Vec3, Vec4, Vec4Swizzles},
     image::Image,
     ray_tracing::{AccelerationStructure, RayFlags},
     spirv,
@@ -17,6 +17,9 @@ pub struct Aabb {
     max_y: f32,
     max_z: f32,
 }
+
+#[repr(C)]
+pub struct UniformColorBuffer(Vec4);
 
 // Ray-AABB intersection
 #[allow(unused)]
@@ -73,12 +76,16 @@ pub fn main_vs(
 
 #[spirv(miss)]
 pub fn main_miss(#[spirv(incoming_ray_payload)] out: &mut Vec3) {
-    *out = vec3(0.4, 0.3, 0.2);
+    *out = vec3(0.0, 0.0, 0.0);
 }
 
 #[spirv(closest_hit)]
-pub fn main_closest_hit(#[spirv(incoming_ray_payload)] out: &mut Vec3) {
-    *out = vec3(1.0, 1.0, 1.0);
+pub fn main_closest_hit(
+    #[spirv(instance_custom_index)] index: usize,
+    #[spirv(uniform, descriptor_set = 0, binding = 2)] color_buffer: &[UniformColorBuffer; 3],
+    #[spirv(incoming_ray_payload)] out: &mut Vec3,
+) {
+    *out = color_buffer[index].0.xyz();
 }
 
 #[spirv(intersection)]

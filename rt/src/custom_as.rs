@@ -1,13 +1,12 @@
 use ash::{
-    extensions::khr::AccelerationStructure,
+    khr::acceleration_structure,
     vk::{
         self, AccelerationStructureGeometryKHR, AccelerationStructureKHR, CommandPool, Packed24_8,
         PhysicalDeviceMemoryProperties, Queue,
     },
-    Device,
 };
 
-use crate::{base::ExampleBase, get_buffer_device_address, BufferResource};
+use crate::{base::ExampleBase, get_buffer_device_address, utils::BufferResource};
 
 pub fn create_geometry(
     base: &ExampleBase,
@@ -40,51 +39,51 @@ pub fn create_geometry(
         aabb_buffer
     };
 
-    let geometry = vk::AccelerationStructureGeometryKHR::builder()
+    let geometry = vk::AccelerationStructureGeometryKHR::default()
         .geometry_type(vk::GeometryTypeKHR::AABBS)
         .geometry(vk::AccelerationStructureGeometryDataKHR {
-            aabbs: vk::AccelerationStructureGeometryAabbsDataKHR::builder()
-                .data(vk::DeviceOrHostAddressConstKHR {
+            aabbs: vk::AccelerationStructureGeometryAabbsDataKHR::default().data(
+                vk::DeviceOrHostAddressConstKHR {
                     device_address: unsafe {
                         get_buffer_device_address(&base.device, aabb_buffer.buffer)
                     },
-                })
-                .build(),
+                },
+            ),
         })
-        .flags(vk::GeometryFlagsKHR::OPAQUE)
-        .build();
+        .flags(vk::GeometryFlagsKHR::OPAQUE);
 
     (geometry, aabb_buffer)
 }
 
 pub fn create_bottom_as(
-    acceleration_structure: &AccelerationStructure,
+    acceleration_structure_loader: &mut acceleration_structure::Device,
     geometry: AccelerationStructureGeometryKHR,
-    device: &Device,
+    device: &ash::Device,
     device_memory_properties: PhysicalDeviceMemoryProperties,
     command_pool: CommandPool,
     graphics_queue: Queue,
 ) -> (AccelerationStructureKHR, BufferResource) {
-    let build_range_info = vk::AccelerationStructureBuildRangeInfoKHR::builder()
+    let build_range_info = vk::AccelerationStructureBuildRangeInfoKHR::default()
         .primitive_count(1)
         .primitive_offset(0)
-        .transform_offset(0)
-        .build();
+        .transform_offset(0);
 
     let geometries = [geometry];
 
-    let mut build_info = vk::AccelerationStructureBuildGeometryInfoKHR::builder()
+    let mut build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
         .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
         .geometries(&geometries)
         .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-        .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
-        .build();
+        .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL);
 
-    let size_info = unsafe {
-        acceleration_structure.get_acceleration_structure_build_sizes(
+    let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
+
+    unsafe {
+        acceleration_structure_loader.get_acceleration_structure_build_sizes(
             vk::AccelerationStructureBuildTypeKHR::DEVICE,
             &build_info,
             &[1],
+            &mut size_info,
         )
     };
 
@@ -98,16 +97,16 @@ pub fn create_bottom_as(
         device_memory_properties,
     );
 
-    let as_create_info = vk::AccelerationStructureCreateInfoKHR::builder()
+    let as_create_info = vk::AccelerationStructureCreateInfoKHR::default()
         .ty(build_info.ty)
         .size(size_info.acceleration_structure_size)
         .buffer(bottom_as_buffer.buffer)
-        .offset(0)
-        .build();
+        .offset(0);
 
-    let bottom_as =
-        unsafe { acceleration_structure.create_acceleration_structure(&as_create_info, None) }
-            .unwrap();
+    let bottom_as = unsafe {
+        acceleration_structure_loader.create_acceleration_structure(&as_create_info, None)
+    }
+    .unwrap();
 
     build_info.dst_acceleration_structure = bottom_as;
 
@@ -124,11 +123,10 @@ pub fn create_bottom_as(
     };
 
     let build_command_buffer = {
-        let allocate_info = vk::CommandBufferAllocateInfo::builder()
+        let allocate_info = vk::CommandBufferAllocateInfo::default()
             .command_buffer_count(1)
             .command_pool(command_pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .build();
+            .level(vk::CommandBufferLevel::PRIMARY);
 
         let command_buffers = unsafe { device.allocate_command_buffers(&allocate_info) }.unwrap();
         command_buffers[0]
@@ -138,13 +136,12 @@ pub fn create_bottom_as(
         device
             .begin_command_buffer(
                 build_command_buffer,
-                &vk::CommandBufferBeginInfo::builder()
-                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-                    .build(),
+                &vk::CommandBufferBeginInfo::default()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
             )
             .unwrap();
 
-        acceleration_structure.cmd_build_acceleration_structures(
+        acceleration_structure_loader.cmd_build_acceleration_structures(
             build_command_buffer,
             &[build_info],
             &[&[build_range_info]],
@@ -153,9 +150,7 @@ pub fn create_bottom_as(
         device
             .queue_submit(
                 graphics_queue,
-                &[vk::SubmitInfo::builder()
-                    .command_buffers(&[build_command_buffer])
-                    .build()],
+                &[vk::SubmitInfo::default().command_buffers(&[build_command_buffer])],
                 vk::Fence::null(),
             )
             .expect("queue submit failed.");
@@ -169,16 +164,17 @@ pub fn create_bottom_as(
 }
 
 pub fn create_instances(
-    acceleration_structure: &AccelerationStructure,
+    acceleration_structure_loader: &acceleration_structure::Device,
     bottom_as: AccelerationStructureKHR,
-    device: &Device,
+    device: &ash::Device,
     device_memory_properties: PhysicalDeviceMemoryProperties,
 ) -> (usize, BufferResource) {
     let accel_handle = {
-        let as_addr_info = vk::AccelerationStructureDeviceAddressInfoKHR::builder()
-            .acceleration_structure(bottom_as)
-            .build();
-        unsafe { acceleration_structure.get_acceleration_structure_device_address(&as_addr_info) }
+        let as_addr_info = vk::AccelerationStructureDeviceAddressInfoKHR::default()
+            .acceleration_structure(bottom_as);
+        unsafe {
+            acceleration_structure_loader.get_acceleration_structure_device_address(&as_addr_info)
+        }
     };
 
     let transform_0: [f32; 12] = [1.0, 0.0, 0.0, -1.5, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0];
@@ -245,27 +241,25 @@ pub fn create_instances(
 }
 
 pub fn create_top_as(
-    acceleration_structure: &AccelerationStructure,
+    acceleration_structure_loader: &mut acceleration_structure::Device,
     instance_count: usize,
     instance_buffer: &BufferResource,
-    device: &Device,
+    device: &ash::Device,
     device_memory_properties: PhysicalDeviceMemoryProperties,
     command_pool: CommandPool,
     graphics_queue: Queue,
 ) -> (AccelerationStructureKHR, BufferResource) {
-    let build_range_info = vk::AccelerationStructureBuildRangeInfoKHR::builder()
+    let build_range_info = vk::AccelerationStructureBuildRangeInfoKHR::default()
         .first_vertex(0)
         .primitive_count(instance_count as u32)
         .primitive_offset(0)
-        .transform_offset(0)
-        .build();
+        .transform_offset(0);
 
     let build_command_buffer = {
-        let allocate_info = vk::CommandBufferAllocateInfo::builder()
+        let allocate_info = vk::CommandBufferAllocateInfo::default()
             .command_buffer_count(1)
             .command_pool(command_pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .build();
+            .level(vk::CommandBufferLevel::PRIMARY);
 
         let command_buffers = unsafe { device.allocate_command_buffers(&allocate_info) }.unwrap();
         command_buffers[0]
@@ -275,15 +269,13 @@ pub fn create_top_as(
         device
             .begin_command_buffer(
                 build_command_buffer,
-                &vk::CommandBufferBeginInfo::builder()
-                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-                    .build(),
+                &vk::CommandBufferBeginInfo::default()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
             )
             .unwrap();
-        let memory_barrier = vk::MemoryBarrier::builder()
+        let memory_barrier = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-            .dst_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR)
-            .build();
+            .dst_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR);
         device.cmd_pipeline_barrier(
             build_command_buffer,
             vk::PipelineStageFlags::TRANSFER,
@@ -295,34 +287,33 @@ pub fn create_top_as(
         );
     }
 
-    let instances = vk::AccelerationStructureGeometryInstancesDataKHR::builder()
+    let instances = vk::AccelerationStructureGeometryInstancesDataKHR::default()
         .array_of_pointers(false)
         .data(vk::DeviceOrHostAddressConstKHR {
             device_address: unsafe { get_buffer_device_address(&device, instance_buffer.buffer) },
-        })
-        .build();
+        });
 
-    let geometry = vk::AccelerationStructureGeometryKHR::builder()
+    let geometry = vk::AccelerationStructureGeometryKHR::default()
         .geometry_type(vk::GeometryTypeKHR::INSTANCES)
-        .geometry(vk::AccelerationStructureGeometryDataKHR { instances })
-        .build();
+        .geometry(vk::AccelerationStructureGeometryDataKHR { instances });
 
     let geometries = [geometry];
 
-    let mut build_info = vk::AccelerationStructureBuildGeometryInfoKHR::builder()
+    let mut build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
         .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
         .geometries(&geometries)
         .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-        .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-        .build();
+        .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL);
 
-    let size_info = unsafe {
-        acceleration_structure.get_acceleration_structure_build_sizes(
+    let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
+    unsafe {
+        acceleration_structure_loader.get_acceleration_structure_build_sizes(
             vk::AccelerationStructureBuildTypeKHR::DEVICE,
             &build_info,
             &[build_range_info.primitive_count],
+            &mut size_info,
         )
-    };
+    }
 
     let top_as_buffer = BufferResource::new(
         size_info.acceleration_structure_size,
@@ -334,16 +325,16 @@ pub fn create_top_as(
         device_memory_properties,
     );
 
-    let as_create_info = vk::AccelerationStructureCreateInfoKHR::builder()
+    let as_create_info = vk::AccelerationStructureCreateInfoKHR::default()
         .ty(build_info.ty)
         .size(size_info.acceleration_structure_size)
         .buffer(top_as_buffer.buffer)
-        .offset(0)
-        .build();
+        .offset(0);
 
-    let top_as =
-        unsafe { acceleration_structure.create_acceleration_structure(&as_create_info, None) }
-            .unwrap();
+    let top_as = unsafe {
+        acceleration_structure_loader.create_acceleration_structure(&as_create_info, None)
+    }
+    .unwrap();
 
     build_info.dst_acceleration_structure = top_as;
 
@@ -360,7 +351,7 @@ pub fn create_top_as(
     };
 
     unsafe {
-        acceleration_structure.cmd_build_acceleration_structures(
+        acceleration_structure_loader.cmd_build_acceleration_structures(
             build_command_buffer,
             &[build_info],
             &[&[build_range_info]],
@@ -369,9 +360,7 @@ pub fn create_top_as(
         device
             .queue_submit(
                 graphics_queue,
-                &[vk::SubmitInfo::builder()
-                    .command_buffers(&[build_command_buffer])
-                    .build()],
+                &[vk::SubmitInfo::default().command_buffers(&[build_command_buffer])],
                 vk::Fence::null(),
             )
             .expect("queue submit failed.");
