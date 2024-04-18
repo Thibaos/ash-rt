@@ -21,8 +21,8 @@ pub struct Aabb {
 #[repr(C)]
 pub struct UniformColorBuffer(Vec4);
 
-// Ray-AABB intersection
 #[allow(unused)]
+// Ray-AABB intersection
 fn hit_aabb(aabb: &Aabb, origin: Vec3, direction: Vec3) -> f32 {
     let inv_dir = 1.0 / direction;
     let minimum = Vec3 {

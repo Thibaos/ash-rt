@@ -1,13 +1,11 @@
-use ash::{
-    util::Align,
-    vk::{
-        self, AccelerationStructureKHR, DescriptorPool, DescriptorSet, DescriptorSetLayout,
-        ImageView, PhysicalDeviceMemoryProperties, PhysicalDeviceRayTracingPipelinePropertiesKHR,
-        Pipeline, PipelineLayout, StridedDeviceAddressRegionKHR,
-    },
+use std::{
+    borrow::Cow,
+    collections::HashSet,
+    ffi::{c_char, CStr},
+    ptr,
 };
 
-use crate::{aligned_size, base::ExampleBase, create_shader_module, get_buffer_device_address};
+use ash::{khr, prelude::VkResult, util, vk, Device, Instance};
 
 pub const WIDTH: u32 = 1920;
 pub const HEIGHT: u32 = 1080;
@@ -18,6 +16,167 @@ pub struct Vector3 {
     pub y: f32,
     pub z: f32,
     pub _pad: f32,
+}
+
+// Simple offset_of macro akin to C++ offsetof
+#[macro_export]
+macro_rules! offset_of {
+    ($base:path, $field:ident) => {{
+        #[allow(unused_unsafe)]
+        unsafe {
+            let b: $base = mem::zeroed();
+            std::ptr::addr_of!(b.$field) as isize - std::ptr::addr_of!(b) as isize
+        }
+    }};
+}
+
+/// Helper function for submitting command buffers. Immediately waits for the fence before the command buffer
+/// is executed. That way we can delay the waiting for the fences by 1 frame which is good for performance.
+/// Make sure to create the fence in a signaled state on the first use.
+#[allow(clippy::too_many_arguments)]
+pub fn record_submit_commandbuffer<F: FnOnce(&Device, vk::CommandBuffer)>(
+    device: &Device,
+    command_buffer: vk::CommandBuffer,
+    command_buffer_reuse_fence: vk::Fence,
+    submit_queue: vk::Queue,
+    wait_mask: &[vk::PipelineStageFlags],
+    wait_semaphores: &[vk::Semaphore],
+    signal_semaphores: &[vk::Semaphore],
+    base_pass: F,
+) {
+    unsafe {
+        device
+            .wait_for_fences(&[command_buffer_reuse_fence], true, std::u64::MAX)
+            .expect("Wait for fence failed.");
+
+        device
+            .reset_fences(&[command_buffer_reuse_fence])
+            .expect("Reset fences failed.");
+
+        device
+            .reset_command_buffer(
+                command_buffer,
+                vk::CommandBufferResetFlags::RELEASE_RESOURCES,
+            )
+            .expect("Reset command buffer failed.");
+
+        let command_buffer_begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+        device
+            .begin_command_buffer(command_buffer, &command_buffer_begin_info)
+            .expect("Begin commandbuffer");
+
+        base_pass(device, command_buffer);
+
+        device
+            .end_command_buffer(command_buffer)
+            .expect("End commandbuffer");
+
+        let command_buffers = vec![command_buffer];
+
+        let submit_info = vk::SubmitInfo::default()
+            .wait_semaphores(wait_semaphores)
+            .wait_dst_stage_mask(wait_mask)
+            .command_buffers(&command_buffers)
+            .signal_semaphores(signal_semaphores);
+
+        device
+            .queue_submit(submit_queue, &[submit_info], command_buffer_reuse_fence)
+            .expect("queue submit failed.");
+    }
+}
+
+pub unsafe extern "system" fn vulkan_debug_callback(
+    message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+    message_type: vk::DebugUtilsMessageTypeFlagsEXT,
+    p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
+    _user_data: *mut std::os::raw::c_void,
+) -> vk::Bool32 {
+    let callback_data = *p_callback_data;
+    let message_id_number = callback_data.message_id_number;
+
+    let message_id_name = if callback_data.p_message_id_name.is_null() {
+        Cow::from("")
+    } else {
+        CStr::from_ptr(callback_data.p_message_id_name).to_string_lossy()
+    };
+
+    let message = if callback_data.p_message.is_null() {
+        Cow::from("")
+    } else {
+        CStr::from_ptr(callback_data.p_message).to_string_lossy()
+    };
+
+    println!(
+        "{message_severity:?}:\n{message_type:?} [{message_id_name} ({message_id_number})] : {message}\n",
+    );
+
+    vk::FALSE
+}
+
+pub fn find_memorytype_index(
+    memory_req: &vk::MemoryRequirements,
+    memory_prop: &vk::PhysicalDeviceMemoryProperties,
+    flags: vk::MemoryPropertyFlags,
+) -> Option<u32> {
+    memory_prop.memory_types[..memory_prop.memory_type_count as _]
+        .iter()
+        .enumerate()
+        .find(|(index, memory_type)| {
+            (1 << index) & memory_req.memory_type_bits != 0
+                && memory_type.property_flags & flags == flags
+        })
+        .map(|(index, _memory_type)| index as _)
+}
+
+pub fn pick_physical_device_and_queue_family_indices(
+    instance: &Instance,
+    surface: vk::SurfaceKHR,
+    surface_loader: &khr::surface::Instance,
+    extensions: &[&CStr],
+) -> VkResult<Option<(vk::PhysicalDevice, u32)>> {
+    Ok(unsafe { instance.enumerate_physical_devices() }?
+        .into_iter()
+        .find_map(|physical_device| {
+            let has_all_extesions =
+                unsafe { instance.enumerate_device_extension_properties(physical_device) }.map(
+                    |exts| {
+                        let set: HashSet<&CStr> = exts
+                            .iter()
+                            .map(|ext| unsafe {
+                                CStr::from_ptr(&ext.extension_name as *const c_char)
+                            })
+                            .collect();
+
+                        extensions.iter().all(|ext| set.contains(ext))
+                    },
+                );
+            if has_all_extesions != Ok(true) {
+                return None;
+            }
+
+            let graphics_family =
+                unsafe { instance.get_physical_device_queue_family_properties(physical_device) }
+                    .into_iter()
+                    .enumerate()
+                    .find(|(index, device_properties)| {
+                        device_properties.queue_count > 0
+                            && device_properties
+                                .queue_flags
+                                .contains(vk::QueueFlags::GRAPHICS)
+                            && unsafe {
+                                surface_loader.get_physical_device_surface_support(
+                                    physical_device,
+                                    *index as u32,
+                                    surface,
+                                )
+                            }
+                            .unwrap()
+                    });
+
+            graphics_family.map(|(i, _)| (physical_device, i as u32))
+        }))
 }
 
 pub fn get_memory_type_index(
@@ -40,7 +199,7 @@ pub fn get_memory_type_index(
 #[derive(Clone)]
 pub struct BufferResource {
     pub buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
+    pub memory: vk::DeviceMemory,
     size: vk::DeviceSize,
 }
 
@@ -104,7 +263,8 @@ impl BufferResource {
                 size
             );
             let mapped_ptr = self.map(size, device);
-            let mut mapped_slice = Align::new(mapped_ptr, std::mem::align_of::<T>() as u64, size);
+            let mut mapped_slice =
+                util::Align::new(mapped_ptr, std::mem::align_of::<T>() as u64, size);
             mapped_slice.copy_from_slice(data);
             self.unmap(device);
         }
@@ -131,343 +291,28 @@ impl BufferResource {
     }
 }
 
-pub fn create_color_buffers(
-    base: &ExampleBase,
-    device_memory_properties: PhysicalDeviceMemoryProperties,
-) -> BufferResource {
-    let colors = [
-        Vector3 {
-            x: 1.0,
-            y: 0.0,
-            z: 0.0,
-            _pad: 0.0,
-        },
-        Vector3 {
-            x: 0.0,
-            y: 1.0,
-            z: 0.0,
-            _pad: 0.0,
-        },
-        Vector3 {
-            x: 0.0,
-            y: 0.0,
-            z: 1.0,
-            _pad: 0.0,
-        },
-    ];
-
-    let mut colors_buffer = BufferResource::new(
-        std::mem::size_of_val(&colors) as u64,
-        vk::BufferUsageFlags::UNIFORM_BUFFER,
-        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        &base.device,
-        device_memory_properties,
-    );
-    colors_buffer.store(&colors, &base.device);
-
-    colors_buffer
-}
-
-pub fn create_rt_descriptor_sets(
-    base: &ExampleBase,
-    image_view: ImageView,
-    top_as: AccelerationStructureKHR,
-    colors_buffers: &BufferResource,
-) -> (
-    DescriptorPool,
-    DescriptorSet,
-    DescriptorSetLayout,
-    Pipeline,
-    PipelineLayout,
-    usize,
-) {
-    let mut count_allocate_info =
-        vk::DescriptorSetVariableDescriptorCountAllocateInfo::default().descriptor_counts(&[1]);
-
-    let descriptor_sizes = [
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
-            descriptor_count: 1,
-        },
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::STORAGE_IMAGE,
-            descriptor_count: 1,
-        },
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::UNIFORM_BUFFER,
-            descriptor_count: 1,
-        },
-    ];
-
-    let descriptor_pool_info = vk::DescriptorPoolCreateInfo::default()
-        .pool_sizes(&descriptor_sizes)
-        .max_sets(1);
-
-    let descriptor_pool = unsafe {
-        base.device
-            .create_descriptor_pool(&descriptor_pool_info, None)
-    }
-    .unwrap();
-
-    let binding_flags_inner = [
-        vk::DescriptorBindingFlagsEXT::empty(),
-        vk::DescriptorBindingFlagsEXT::empty(),
-        vk::DescriptorBindingFlags::empty(),
-    ];
-
-    let mut binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfoEXT::default()
-        .binding_flags(&binding_flags_inner);
-
-    let descriptor_set_layout = unsafe {
-        base.device.create_descriptor_set_layout(
-            &vk::DescriptorSetLayoutCreateInfo::default()
-                .bindings(&[
-                    vk::DescriptorSetLayoutBinding::default()
-                        .descriptor_count(1)
-                        .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
-                        .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
-                        .binding(0),
-                    vk::DescriptorSetLayoutBinding::default()
-                        .descriptor_count(1)
-                        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                        .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
-                        .binding(1),
-                    vk::DescriptorSetLayoutBinding::default()
-                        .descriptor_count(1)
-                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                        .stage_flags(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-                        .binding(2),
-                ])
-                .push_next(&mut binding_flags),
-            None,
-        )
-    }
-    .unwrap();
-
-    const SHADER: &[u8] = include_bytes!(env!("shaders.spv"));
-
-    let shader_module = unsafe { create_shader_module(&base.device, SHADER).unwrap() };
-
-    let layouts = vec![descriptor_set_layout];
-    let layout_create_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts);
-
-    let pipeline_layout = unsafe {
-        base.device
-            .create_pipeline_layout(&layout_create_info, None)
-    }
-    .unwrap();
-
-    let shader_groups = vec![
-        // group0 = [ raygen ]
-        vk::RayTracingShaderGroupCreateInfoKHR::default()
-            .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
-            .general_shader(0)
-            .closest_hit_shader(vk::SHADER_UNUSED_KHR)
-            .any_hit_shader(vk::SHADER_UNUSED_KHR)
-            .intersection_shader(vk::SHADER_UNUSED_KHR),
-        // group1 = [ chit ]
-        vk::RayTracingShaderGroupCreateInfoKHR::default()
-            .ty(vk::RayTracingShaderGroupTypeKHR::PROCEDURAL_HIT_GROUP)
-            .general_shader(vk::SHADER_UNUSED_KHR)
-            .closest_hit_shader(1)
-            .any_hit_shader(vk::SHADER_UNUSED_KHR)
-            .intersection_shader(2),
-        // group3 = [ miss ]
-        vk::RayTracingShaderGroupCreateInfoKHR::default()
-            .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
-            .general_shader(3)
-            .closest_hit_shader(vk::SHADER_UNUSED_KHR)
-            .any_hit_shader(vk::SHADER_UNUSED_KHR)
-            .intersection_shader(vk::SHADER_UNUSED_KHR),
-    ];
-
-    let shader_stages = vec![
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::RAYGEN_KHR)
-            .module(shader_module)
-            .name(std::ffi::CStr::from_bytes_with_nul(b"main_ray_generation\0").unwrap()),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-            .module(shader_module)
-            .name(std::ffi::CStr::from_bytes_with_nul(b"main_closest_hit\0").unwrap()),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::INTERSECTION_KHR)
-            .module(shader_module)
-            .name(std::ffi::CStr::from_bytes_with_nul(b"main_intersection\0").unwrap()),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::MISS_KHR)
-            .module(shader_module)
-            .name(std::ffi::CStr::from_bytes_with_nul(b"main_miss\0").unwrap()),
-    ];
-
-    let pipeline = unsafe {
-        base.ray_tracing_pipeline_loader
-            .create_ray_tracing_pipelines(
-                vk::DeferredOperationKHR::null(),
-                vk::PipelineCache::null(),
-                &[vk::RayTracingPipelineCreateInfoKHR::default()
-                    .stages(&shader_stages)
-                    .groups(&shader_groups)
-                    .max_pipeline_ray_recursion_depth(1)
-                    .layout(pipeline_layout)],
-                None,
-            )
-    }
-    .unwrap()[0];
-
-    unsafe {
-        base.device.destroy_shader_module(shader_module, None);
-    }
-
-    let descriptor_set = unsafe {
-        base.device.allocate_descriptor_sets(
-            &vk::DescriptorSetAllocateInfo::default()
-                .descriptor_pool(descriptor_pool)
-                .set_layouts(&[descriptor_set_layout])
-                .push_next(&mut count_allocate_info),
-        )
-    }
-    .unwrap()[0];
-
-    let accel_structs = [top_as];
-
-    let mut accel_info = vk::WriteDescriptorSetAccelerationStructureKHR::default()
-        .acceleration_structures(&accel_structs);
-
-    let accel_write = vk::WriteDescriptorSet::default()
-        .dst_set(descriptor_set)
-        .dst_binding(0)
-        .dst_array_element(0)
-        .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
-        .descriptor_count(1)
-        .push_next(&mut accel_info);
-
-    let image_info = [vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::GENERAL)
-        .image_view(image_view)];
-
-    let image_write = vk::WriteDescriptorSet::default()
-        .dst_set(descriptor_set)
-        .dst_binding(1)
-        .dst_array_element(0)
-        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-        .image_info(&image_info);
-
-    let colors_buffer_info = [vk::DescriptorBufferInfo::default()
-        .buffer(colors_buffers.buffer)
-        .range(vk::WHOLE_SIZE)];
-
-    let colors_buffer_write = vk::WriteDescriptorSet::default()
-        .dst_set(descriptor_set)
-        .dst_binding(2)
-        .dst_array_element(0)
-        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-        .buffer_info(&colors_buffer_info);
-
-    unsafe {
-        base.device
-            .update_descriptor_sets(&[accel_write, image_write, colors_buffer_write], &[]);
-    }
-
-    (
-        descriptor_pool,
-        descriptor_set,
-        descriptor_set_layout,
-        pipeline,
-        pipeline_layout,
-        shader_groups.len(),
-    )
-}
-
-pub fn create_rt_sbt(
-    base: &ExampleBase,
-    rt_pipeline_properties: &PhysicalDeviceRayTracingPipelinePropertiesKHR,
-    device_memory_properties: PhysicalDeviceMemoryProperties,
-    pipeline: Pipeline,
-    shader_group_count: usize,
-) -> (
-    BufferResource,
-    StridedDeviceAddressRegionKHR,
-    StridedDeviceAddressRegionKHR,
-    StridedDeviceAddressRegionKHR,
-    StridedDeviceAddressRegionKHR,
-) {
-    let handle_size_aligned = aligned_size(
-        rt_pipeline_properties.shader_group_handle_size,
-        rt_pipeline_properties.shader_group_base_alignment,
-    ) as u64;
-
-    let shader_binding_table_buffer = {
-        let incoming_table_data = unsafe {
-            base.ray_tracing_pipeline_loader
-                .get_ray_tracing_shader_group_handles(
-                    pipeline,
-                    0,
-                    shader_group_count as u32,
-                    shader_group_count * rt_pipeline_properties.shader_group_handle_size as usize,
-                )
-        }
-        .unwrap();
-
-        let table_size = shader_group_count * handle_size_aligned as usize;
-        let mut table_data = vec![0u8; table_size];
-
-        for i in 0..shader_group_count {
-            table_data[i * handle_size_aligned as usize
-                ..i * handle_size_aligned as usize
-                    + rt_pipeline_properties.shader_group_handle_size as usize]
-                .copy_from_slice(
-                    &incoming_table_data[i * rt_pipeline_properties.shader_group_handle_size
-                        as usize
-                        ..i * rt_pipeline_properties.shader_group_handle_size as usize
-                            + rt_pipeline_properties.shader_group_handle_size as usize],
-                );
-        }
-
-        let mut shader_binding_table_buffer = BufferResource::new(
-            table_size as u64,
-            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                | vk::BufferUsageFlags::TRANSFER_SRC
-                | vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR,
-            vk::MemoryPropertyFlags::HOST_VISIBLE,
-            &base.device,
-            device_memory_properties,
-        );
-
-        shader_binding_table_buffer.store(&table_data, &base.device);
-
-        shader_binding_table_buffer
+pub unsafe fn create_shader_module(
+    device: &ash::Device,
+    code: &[u8],
+) -> VkResult<vk::ShaderModule> {
+    let shader_module_create_info = vk::ShaderModuleCreateInfo {
+        s_type: vk::StructureType::SHADER_MODULE_CREATE_INFO,
+        p_next: ptr::null(),
+        flags: vk::ShaderModuleCreateFlags::empty(),
+        code_size: code.len(),
+        p_code: code.as_ptr() as *const u32,
+        ..Default::default()
     };
 
-    // |[ raygen shader ]|[ hit shader  ]|[ miss shader ]|
-    // |                 |               |               |
-    // | 0               | 1             | 2             | 3
+    device.create_shader_module(&shader_module_create_info, None)
+}
 
-    let sbt_address =
-        unsafe { get_buffer_device_address(&base.device, shader_binding_table_buffer.buffer) };
+pub fn aligned_size(value: u32, alignment: u32) -> u32 {
+    (value + alignment - 1) & !(alignment - 1)
+}
 
-    let sbt_raygen_region = vk::StridedDeviceAddressRegionKHR::default()
-        .device_address(sbt_address)
-        .size(handle_size_aligned)
-        .stride(handle_size_aligned);
+pub unsafe fn get_buffer_device_address(device: &ash::Device, buffer: vk::Buffer) -> u64 {
+    let buffer_device_address_info = vk::BufferDeviceAddressInfo::default().buffer(buffer);
 
-    let sbt_miss_region = vk::StridedDeviceAddressRegionKHR::default()
-        .device_address(sbt_address + 2 * handle_size_aligned)
-        .size(handle_size_aligned)
-        .stride(handle_size_aligned);
-
-    let sbt_hit_region = vk::StridedDeviceAddressRegionKHR::default()
-        .device_address(sbt_address + handle_size_aligned)
-        .size(handle_size_aligned)
-        .stride(handle_size_aligned);
-
-    let sbt_call_region = vk::StridedDeviceAddressRegionKHR::default();
-
-    (
-        shader_binding_table_buffer,
-        sbt_raygen_region,
-        sbt_miss_region,
-        sbt_hit_region,
-        sbt_call_region,
-    )
+    device.get_buffer_device_address(&buffer_device_address_info)
 }
