@@ -10,14 +10,6 @@ use ash::{khr, prelude::VkResult, util, vk, Device, Instance};
 pub const WIDTH: u32 = 1920;
 pub const HEIGHT: u32 = 1080;
 
-#[derive(Clone, Debug, Copy)]
-pub struct Vector3 {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-    pub _pad: f32,
-}
-
 // Simple offset_of macro akin to C++ offsetof
 #[macro_export]
 macro_rules! offset_of {

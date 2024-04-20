@@ -1,8 +1,12 @@
 mod base;
 mod utils;
 
+extern crate nalgebra_glm as glm;
+
 use ash::vk;
-use base::AppBase;
+use base::{AppBase, GlobalUniforms};
+use bytemuck::bytes_of;
+use glm::{infinite_perspective_rh_zo, inverse, look_at_rh, Vec3};
 use utils::{HEIGHT, WIDTH};
 use winit::{
     event::{ElementState, Event, KeyEvent, WindowEvent},
@@ -29,6 +33,30 @@ fn main() {
         }
         .expect("Failed to allocate Command Buffers!")[0]
     };
+
+    let eye = Vec3::new(0.0, 0.0, -2.0);
+    let target = Vec3::new(0.0, 0.0, 1.0);
+
+    let view_matrix = look_at_rh(&eye, &target, &Vec3::y());
+
+    let proj_matrix = infinite_perspective_rh_zo(WIDTH as f32 / HEIGHT as f32, 3.14 / 2.0, 0.1);
+
+    let view_proj = view_matrix * proj_matrix;
+    let view_inverse = inverse(&view_matrix);
+    let proj_inverse = inverse(&proj_matrix);
+
+    let uniform_buffer_data = GlobalUniforms {
+        origin: eye.to_homogeneous().into(),
+        direction: target.to_homogeneous().into(),
+        view_proj,
+        view_inverse,
+        proj_inverse,
+    };
+
+    base.uniforms_buffer
+        .as_mut()
+        .unwrap()
+        .store(bytes_of(&uniform_buffer_data), &base.device);
 
     let main_loop = |base: &mut AppBase<'_>| {
         if base.resized {
@@ -130,7 +158,10 @@ fn main() {
                     vk::PipelineBindPoint::RAY_TRACING_KHR,
                     base.pipeline_layout.unwrap(),
                     0,
-                    &[base.descriptor_set.unwrap()],
+                    &[
+                        base.rt_descriptor_set.unwrap(),
+                        base.uniforms_descriptor_set.unwrap(),
+                    ],
                     &[],
                 );
                 base.ray_tracing_pipeline_loader.cmd_trace_rays(

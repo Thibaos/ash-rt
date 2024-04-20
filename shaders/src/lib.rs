@@ -2,7 +2,7 @@
 
 use spirv_std::{
     arch::report_intersection,
-    glam::{uvec2, vec2, vec3, vec4, UVec3, Vec2, Vec3, Vec4, Vec4Swizzles},
+    glam::{uvec2, vec2, vec3, vec4, Mat4, UVec3, Vec2, Vec3, Vec4, Vec4Swizzles},
     image::Image,
     ray_tracing::{AccelerationStructure, RayFlags},
     spirv,
@@ -18,8 +18,15 @@ pub struct Aabb {
     max_z: f32,
 }
 
+// Uniform buffer set at each frame
 #[repr(C)]
-pub struct UniformColorBuffer(Vec4);
+pub struct GlobalUniforms {
+    pub origin: Vec3,
+    pub direction: Vec3,
+    pub view_proj: Mat4,    // Camera view * projection
+    pub view_inverse: Mat4, // Camera inverse view matrix
+    pub proj_inverse: Mat4, // Camera inverse projection matrix
+}
 
 #[allow(unused)]
 // Ray-AABB intersection
@@ -75,17 +82,15 @@ pub fn main_vs(
 }
 
 #[spirv(miss)]
-pub fn main_miss(#[spirv(incoming_ray_payload)] out: &mut Vec3) {
-    *out = vec3(0.0, 0.0, 0.0);
-}
+pub fn main_miss(#[spirv(incoming_ray_payload)] _out: &mut Vec3) {}
 
 #[spirv(closest_hit)]
 pub fn main_closest_hit(
     #[spirv(instance_custom_index)] index: usize,
-    #[spirv(uniform, descriptor_set = 0, binding = 2)] color_buffer: &[UniformColorBuffer; 3],
+    #[spirv(uniform, descriptor_set = 0, binding = 2)] color_buffer: &[Vec3; 3],
     #[spirv(incoming_ray_payload)] out: &mut Vec3,
 ) {
-    *out = color_buffer[index].0.xyz();
+    *out = color_buffer[index];
 }
 
 #[spirv(intersection)]
@@ -101,16 +106,18 @@ pub fn main_ray_generation(
     #[spirv(launch_size)] launch_size: UVec3,
     #[spirv(descriptor_set = 0, binding = 0)] top_level_as: &AccelerationStructure,
     #[spirv(descriptor_set = 0, binding = 1)] image: &Image!(2D, format = rgba8, sampled = false),
+    #[spirv(uniform, descriptor_set = 1, binding = 0)] globals: &GlobalUniforms,
     #[spirv(ray_payload)] payload: &mut Vec3,
 ) {
     let pixel_center = vec2(launch_id.x as f32, launch_id.y as f32) + vec2(0.5, 0.5);
     let in_uv = pixel_center / vec2(launch_size.x as f32, launch_size.y as f32);
 
     let d = in_uv * 2.0 - Vec2::ONE;
-    let aspect_ratio = launch_size.x as f32 / launch_size.y as f32;
 
-    let origin = vec3(0.0, 0.0, -2.0);
-    let direction = vec3(d.x * aspect_ratio, -d.y, 1.0).normalize();
+    let origin = (globals.view_inverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz();
+    let target = (globals.proj_inverse * vec4(d.x, -d.y, 1.0, 1.0)).xyz();
+    let direction = (globals.view_inverse * target.normalize().extend(0.0)).xyz();
+
     let cull_mask = 0xff;
     let tmin = 0.001;
     let tmax = 1000.0;

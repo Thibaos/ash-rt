@@ -2,6 +2,8 @@ extern crate ash;
 extern crate winit;
 
 use ash::{ext, khr, vk, Device, Entry, Instance};
+use bytemuck::{bytes_of, Pod, Zeroable};
+use glm::{Mat4, Vec4};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::{default::Default, ffi::CStr, ops::Drop, os::raw::c_char};
 
@@ -10,8 +12,18 @@ use winit::{event_loop::EventLoop, window::WindowBuilder};
 use crate::utils::{
     aligned_size, create_shader_module, find_memorytype_index, get_buffer_device_address,
     get_memory_type_index, pick_physical_device_and_queue_family_indices,
-    record_submit_commandbuffer, vulkan_debug_callback, BufferResource, Vector3,
+    record_submit_commandbuffer, vulkan_debug_callback, BufferResource,
 };
+
+#[repr(C)]
+#[derive(Clone, Debug, Copy, Pod, Zeroable)]
+pub struct GlobalUniforms {
+    pub origin: Vec4,
+    pub direction: Vec4,
+    pub view_proj: Mat4,    // Camera view * projection
+    pub view_inverse: Mat4, // Camera inverse view matrix
+    pub proj_inverse: Mat4, // Camera inverse projection matrix
+}
 
 pub struct AppBase<'a> {
     pub entry: Entry,
@@ -47,6 +59,7 @@ pub struct AppBase<'a> {
     pub pool: vk::CommandPool,
     pub draw_command_buffer: vk::CommandBuffer,
     pub setup_command_buffer: vk::CommandBuffer,
+    pub update_command_buffer: vk::CommandBuffer,
     pub render_pass: Option<vk::RenderPass>,
 
     pub depth_image: Option<vk::Image>,
@@ -78,10 +91,14 @@ pub struct AppBase<'a> {
     pub instance_buffer: Option<BufferResource>,
 
     pub colors_buffer: Option<BufferResource>,
+    pub uniforms_buffer: Option<BufferResource>,
 
-    pub descriptor_pool: Option<vk::DescriptorPool>,
-    pub descriptor_set: Option<vk::DescriptorSet>,
-    pub descriptor_set_layout: Option<vk::DescriptorSetLayout>,
+    pub rt_descriptor_pool: Option<vk::DescriptorPool>,
+    pub rt_descriptor_set: Option<vk::DescriptorSet>,
+    pub rt_descriptor_set_layout: Option<vk::DescriptorSetLayout>,
+    pub uniforms_descriptor_pool: Option<vk::DescriptorPool>,
+    pub uniforms_descriptor_set: Option<vk::DescriptorSet>,
+    pub uniforms_descriptor_set_layout: Option<vk::DescriptorSetLayout>,
     pub pipeline: Option<vk::Pipeline>,
     pub pipeline_layout: Option<vk::PipelineLayout>,
     pub shader_group_count: Option<usize>,
@@ -372,7 +389,7 @@ impl AppBase<'_> {
             .image_view(self.rt_image_view.unwrap())];
 
         let image_write = vk::WriteDescriptorSet::default()
-            .dst_set(self.descriptor_set.unwrap())
+            .dst_set(self.rt_descriptor_set.unwrap())
             .dst_binding(1)
             .dst_array_element(0)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
@@ -508,7 +525,7 @@ impl AppBase<'_> {
         self.rt_image_view = Some(rt_image_view);
         self.rt_image_memory = Some(rt_image_memory);
 
-        if self.descriptor_set.is_some() {
+        if self.rt_descriptor_set.is_some() {
             self.update_rt_image_descriptor_set();
         }
 
@@ -775,7 +792,7 @@ impl AppBase<'_> {
             }
         };
 
-        let transform_0: [f32; 12] = [1.0, 0.0, 0.0, -1.5, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0];
+        let transform_0: [f32; 12] = [1.0, 0.0, 0.0, -1.5, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 10.0];
         let transform_1: [f32; 12] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0];
         let transform_2: [f32; 12] = [1.0, 0.0, 0.0, 1.5, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0];
 
@@ -980,26 +997,8 @@ impl AppBase<'_> {
     }
 
     pub fn create_colors_buffer(&mut self) {
-        let colors = [
-            Vector3 {
-                x: 1.0,
-                y: 0.0,
-                z: 0.0,
-                _pad: 0.0,
-            },
-            Vector3 {
-                x: 0.0,
-                y: 1.0,
-                z: 0.0,
-                _pad: 0.0,
-            },
-            Vector3 {
-                x: 0.0,
-                y: 0.0,
-                z: 1.0,
-                _pad: 0.0,
-            },
-        ];
+        let colors = [Vec4::x(), Vec4::y(), Vec4::z()];
+        let data = bytes_of(&colors);
 
         let mut colors_buffer = BufferResource::new(
             std::mem::size_of_val(&colors) as u64,
@@ -1008,9 +1007,26 @@ impl AppBase<'_> {
             &self.device,
             self.device_memory_properties,
         );
-        colors_buffer.store(&colors, &self.device);
+        colors_buffer.store(&data, &self.device);
 
         self.colors_buffer = Some(colors_buffer);
+    }
+
+    pub fn create_uniforms_buffer(&mut self) {
+        let global_uniforms = GlobalUniforms::zeroed();
+
+        let data = &[global_uniforms];
+
+        let mut uniforms_buffer = BufferResource::new(
+            std::mem::size_of_val(data) as u64,
+            vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            &self.device,
+            self.device_memory_properties,
+        );
+        uniforms_buffer.store(data, &self.device);
+
+        self.uniforms_buffer = Some(uniforms_buffer);
     }
 
     fn create_data_structures(&mut self) {
@@ -1019,13 +1035,14 @@ impl AppBase<'_> {
         self.create_as_instances();
         self.create_top_as();
         self.create_colors_buffer();
+        self.create_uniforms_buffer();
     }
 
     fn create_descriptor_sets(&mut self) -> anyhow::Result<()> {
-        let mut count_allocate_info =
+        let mut rt_count_allocate_info =
             vk::DescriptorSetVariableDescriptorCountAllocateInfo::default().descriptor_counts(&[1]);
 
-        let descriptor_sizes = [
+        let rt_descriptor_sizes = [
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
                 descriptor_count: 1,
@@ -1040,26 +1057,26 @@ impl AppBase<'_> {
             },
         ];
 
-        let descriptor_pool_info = vk::DescriptorPoolCreateInfo::default()
-            .pool_sizes(&descriptor_sizes)
+        let rt_descriptor_pool_info = vk::DescriptorPoolCreateInfo::default()
+            .pool_sizes(&rt_descriptor_sizes)
             .max_sets(1);
 
-        let descriptor_pool = unsafe {
+        let rt_descriptor_pool = unsafe {
             self.device
-                .create_descriptor_pool(&descriptor_pool_info, None)
+                .create_descriptor_pool(&rt_descriptor_pool_info, None)
         }
         .unwrap();
 
-        let binding_flags_inner = [
+        let rt_binding_flags_inner = [
             vk::DescriptorBindingFlagsEXT::empty(),
             vk::DescriptorBindingFlagsEXT::empty(),
             vk::DescriptorBindingFlags::empty(),
         ];
 
-        let mut binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfoEXT::default()
-            .binding_flags(&binding_flags_inner);
+        let mut rt_binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfoEXT::default()
+            .binding_flags(&rt_binding_flags_inner);
 
-        let descriptor_set_layout = unsafe {
+        let rt_descriptor_set_layout = unsafe {
             self.device.create_descriptor_set_layout(
                 &vk::DescriptorSetLayoutCreateInfo::default()
                     .bindings(&[
@@ -1079,16 +1096,50 @@ impl AppBase<'_> {
                             .stage_flags(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
                             .binding(2),
                     ])
-                    .push_next(&mut binding_flags),
+                    .push_next(&mut rt_binding_flags),
                 None,
             )
         }?;
+
+        let uniforms_descriptor_sizes = [vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::UNIFORM_BUFFER,
+            descriptor_count: 1,
+        }];
 
         const SHADER: &[u8] = include_bytes!(env!("shaders.spv"));
 
         let shader_module = unsafe { create_shader_module(&self.device, SHADER) }?;
 
-        let layouts = vec![descriptor_set_layout];
+        let uniforms_binding_flags_inner = [vk::DescriptorBindingFlagsEXT::empty()];
+
+        let mut uniforms_binding_flags =
+            vk::DescriptorSetLayoutBindingFlagsCreateInfoEXT::default()
+                .binding_flags(&uniforms_binding_flags_inner);
+
+        let uniforms_descriptor_set_layout = unsafe {
+            self.device.create_descriptor_set_layout(
+                &vk::DescriptorSetLayoutCreateInfo::default()
+                    .bindings(&[vk::DescriptorSetLayoutBinding::default()
+                        .descriptor_count(1)
+                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                        .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+                        .binding(0)])
+                    .push_next(&mut uniforms_binding_flags),
+                None,
+            )
+        }?;
+
+        let uniforms_descriptor_pool_info = vk::DescriptorPoolCreateInfo::default()
+            .pool_sizes(&uniforms_descriptor_sizes)
+            .max_sets(1);
+
+        let uniforms_descriptor_pool = unsafe {
+            self.device
+                .create_descriptor_pool(&uniforms_descriptor_pool_info, None)
+        }
+        .unwrap();
+
+        let layouts = vec![rt_descriptor_set_layout, uniforms_descriptor_set_layout];
         let layout_create_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts);
 
         let pipeline_layout = unsafe {
@@ -1160,15 +1211,32 @@ impl AppBase<'_> {
             self.device.destroy_shader_module(shader_module, None);
         }
 
-        let descriptor_set = unsafe {
+        let rt_descriptor_sets = unsafe {
             self.device.allocate_descriptor_sets(
                 &vk::DescriptorSetAllocateInfo::default()
-                    .descriptor_pool(descriptor_pool)
-                    .set_layouts(&[descriptor_set_layout])
-                    .push_next(&mut count_allocate_info),
+                    .descriptor_pool(rt_descriptor_pool)
+                    .set_layouts(&[rt_descriptor_set_layout])
+                    .push_next(&mut rt_count_allocate_info),
             )
         }
-        .unwrap()[0];
+        .unwrap();
+
+        let rt_descriptor_set = rt_descriptor_sets[0];
+
+        let mut uniforms_count_allocate_info =
+            vk::DescriptorSetVariableDescriptorCountAllocateInfo::default().descriptor_counts(&[1]);
+
+        let uniforms_descriptor_sets = unsafe {
+            self.device.allocate_descriptor_sets(
+                &vk::DescriptorSetAllocateInfo::default()
+                    .descriptor_pool(uniforms_descriptor_pool)
+                    .set_layouts(&[uniforms_descriptor_set_layout])
+                    .push_next(&mut uniforms_count_allocate_info),
+            )
+        }
+        .unwrap();
+
+        let uniforms_descriptor_set = uniforms_descriptor_sets[0];
 
         let accel_structs = [self.top_as.unwrap()];
 
@@ -1176,7 +1244,7 @@ impl AppBase<'_> {
             .acceleration_structures(&accel_structs);
 
         let accel_write = vk::WriteDescriptorSet::default()
-            .dst_set(descriptor_set)
+            .dst_set(rt_descriptor_set)
             .dst_binding(0)
             .dst_array_element(0)
             .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
@@ -1188,7 +1256,7 @@ impl AppBase<'_> {
             .image_view(self.rt_image_view.unwrap())];
 
         let image_write = vk::WriteDescriptorSet::default()
-            .dst_set(descriptor_set)
+            .dst_set(rt_descriptor_set)
             .dst_binding(1)
             .dst_array_element(0)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
@@ -1199,7 +1267,7 @@ impl AppBase<'_> {
             .range(vk::WHOLE_SIZE)];
 
         let colors_buffer_write = vk::WriteDescriptorSet::default()
-            .dst_set(descriptor_set)
+            .dst_set(rt_descriptor_set)
             .dst_binding(2)
             .dst_array_element(0)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
@@ -1210,9 +1278,30 @@ impl AppBase<'_> {
                 .update_descriptor_sets(&[accel_write, image_write, colors_buffer_write], &[]);
         }
 
-        self.descriptor_pool = Some(descriptor_pool);
-        self.descriptor_set = Some(descriptor_set);
-        self.descriptor_set_layout = Some(descriptor_set_layout);
+        let uniforms_buffer_info = [vk::DescriptorBufferInfo::default()
+            .buffer(self.uniforms_buffer.as_ref().unwrap().buffer)
+            .range(vk::WHOLE_SIZE)];
+
+        let uniforms_buffer_write = vk::WriteDescriptorSet::default()
+            .dst_set(uniforms_descriptor_set)
+            .dst_binding(0)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .buffer_info(&uniforms_buffer_info);
+
+        unsafe {
+            self.device
+                .update_descriptor_sets(&[uniforms_buffer_write], &[]);
+        }
+
+        self.rt_descriptor_pool = Some(rt_descriptor_pool);
+        self.rt_descriptor_set = Some(rt_descriptor_set);
+        self.rt_descriptor_set_layout = Some(rt_descriptor_set_layout);
+
+        self.uniforms_descriptor_pool = Some(uniforms_descriptor_pool);
+        self.uniforms_descriptor_set = Some(uniforms_descriptor_set);
+        self.uniforms_descriptor_set_layout = Some(uniforms_descriptor_set_layout);
+
         self.pipeline = Some(pipeline);
         self.pipeline_layout = Some(pipeline_layout);
         self.shader_group_count = Some(shader_groups.len());
@@ -1500,14 +1589,15 @@ impl AppBase<'_> {
         let pool = unsafe { device.create_command_pool(&pool_create_info, None) }.unwrap();
 
         let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
-            .command_buffer_count(2)
+            .command_buffer_count(3)
             .command_pool(pool)
             .level(vk::CommandBufferLevel::PRIMARY);
 
         let command_buffers =
             unsafe { device.allocate_command_buffers(&command_buffer_allocate_info) }.unwrap();
         let setup_command_buffer = command_buffers[0];
-        let draw_command_buffer = command_buffers[1];
+        let update_command_buffer = command_buffers[1];
+        let draw_command_buffer = command_buffers[2];
 
         let device_memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
@@ -1554,6 +1644,7 @@ impl AppBase<'_> {
             pool,
             draw_command_buffer,
             setup_command_buffer,
+            update_command_buffer,
             present_complete_semaphore,
             rendering_complete_semaphore,
             draw_commands_reuse_fence,
@@ -1585,9 +1676,13 @@ impl AppBase<'_> {
             instance_count: None,
             instance_buffer: None,
             colors_buffer: None,
-            descriptor_pool: None,
-            descriptor_set: None,
-            descriptor_set_layout: None,
+            uniforms_buffer: None,
+            rt_descriptor_pool: None,
+            rt_descriptor_set: None,
+            rt_descriptor_set_layout: None,
+            uniforms_descriptor_pool: None,
+            uniforms_descriptor_set: None,
+            uniforms_descriptor_set_layout: None,
             pipeline: None,
             pipeline_layout: None,
             shader_group_count: None,
@@ -1610,6 +1705,16 @@ impl AppBase<'_> {
     }
 }
 
+macro_rules! destroy_buffer {
+    ($($buffer_option: expr, $device: expr), *) => {
+        $(
+        let unwrap_result = $buffer_option.as_ref().unwrap();
+        $device.destroy_buffer(unwrap_result.buffer, None);
+        $device.free_memory(unwrap_result.memory, None);
+    )*
+    };
+}
+
 impl Drop for AppBase<'_> {
     fn drop(&mut self) {
         unsafe {
@@ -1626,10 +1731,15 @@ impl Drop for AppBase<'_> {
             self.cleanup_swapchain().unwrap();
 
             self.device
-                .destroy_descriptor_pool(self.descriptor_pool.unwrap(), None);
+                .destroy_descriptor_pool(self.rt_descriptor_pool.unwrap(), None);
+            self.device
+                .destroy_descriptor_pool(self.uniforms_descriptor_pool.unwrap(), None);
             self.device.destroy_pipeline(self.pipeline.unwrap(), None);
             self.device
-                .destroy_descriptor_set_layout(self.descriptor_set_layout.unwrap(), None);
+                .destroy_descriptor_set_layout(self.rt_descriptor_set_layout.unwrap(), None);
+            self.device
+                .destroy_descriptor_set_layout(self.uniforms_descriptor_set_layout.unwrap(), None);
+
             self.device
                 .destroy_pipeline_layout(self.pipeline_layout.unwrap(), None);
 
@@ -1639,29 +1749,13 @@ impl Drop for AppBase<'_> {
             self.acceleration_structure_loader
                 .destroy_acceleration_structure(self.top_as.unwrap(), None);
 
-            let bottom_as_buffer = self.bottom_as_buffer.as_ref().unwrap();
-            self.device.destroy_buffer(bottom_as_buffer.buffer, None);
-            self.device.free_memory(bottom_as_buffer.memory, None);
-
-            let top_as_buffer = self.top_as_buffer.as_ref().unwrap();
-            self.device.destroy_buffer(top_as_buffer.buffer, None);
-            self.device.free_memory(top_as_buffer.memory, None);
-
-            let colors_buffer = self.colors_buffer.as_ref().unwrap();
-            self.device.destroy_buffer(colors_buffer.buffer, None);
-            self.device.free_memory(colors_buffer.memory, None);
-
-            let instance_buffer = self.instance_buffer.as_ref().unwrap();
-            self.device.destroy_buffer(instance_buffer.buffer, None);
-            self.device.free_memory(instance_buffer.memory, None);
-
-            let aabb_buffer = self.aabb_buffer.as_ref().unwrap();
-            self.device.destroy_buffer(aabb_buffer.buffer, None);
-            self.device.free_memory(aabb_buffer.memory, None);
-
-            let sbt_buffer = self.shader_binding_table_buffer.as_ref().unwrap();
-            self.device.destroy_buffer(sbt_buffer.buffer, None);
-            self.device.free_memory(sbt_buffer.memory, None);
+            destroy_buffer!(self.bottom_as_buffer, self.device);
+            destroy_buffer!(self.top_as_buffer, self.device);
+            destroy_buffer!(self.colors_buffer, self.device);
+            destroy_buffer!(self.instance_buffer, self.device);
+            destroy_buffer!(self.aabb_buffer, self.device);
+            destroy_buffer!(self.shader_binding_table_buffer, self.device);
+            destroy_buffer!(self.uniforms_buffer, self.device);
 
             self.device.destroy_command_pool(self.pool, None);
             self.device.destroy_device(None);
