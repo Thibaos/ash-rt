@@ -15,6 +15,27 @@ use winit::{
     platform::run_on_demand::EventLoopExtRunOnDemand,
 };
 
+fn update_camera(base: &mut AppBase, eye: Vec3, direction: Vec3) {
+    let view_matrix = look_at_rh(&eye, &direction, &Vec3::y());
+
+    let proj_matrix = infinite_perspective_rh_zo(WIDTH as f32 / HEIGHT as f32, 3.14 / 2.0, 0.1);
+
+    let view_proj = view_matrix * proj_matrix;
+    let view_inverse = inverse(&view_matrix);
+    let proj_inverse = inverse(&proj_matrix);
+
+    let uniform_buffer_data = GlobalUniforms {
+        view_proj,
+        view_inverse,
+        proj_inverse,
+    };
+
+    base.uniforms_buffer
+        .as_mut()
+        .unwrap()
+        .store(bytes_of(&uniform_buffer_data), &base.device);
+}
+
 fn main() {
     let mut event_loop = EventLoop::new().unwrap();
 
@@ -37,26 +58,7 @@ fn main() {
     let eye = Vec3::new(0.0, 0.0, -2.0);
     let target = Vec3::new(0.0, 0.0, 1.0);
 
-    let view_matrix = look_at_rh(&eye, &target, &Vec3::y());
-
-    let proj_matrix = infinite_perspective_rh_zo(WIDTH as f32 / HEIGHT as f32, 3.14 / 2.0, 0.1);
-
-    let view_proj = view_matrix * proj_matrix;
-    let view_inverse = inverse(&view_matrix);
-    let proj_inverse = inverse(&proj_matrix);
-
-    let uniform_buffer_data = GlobalUniforms {
-        origin: eye.to_homogeneous().into(),
-        direction: target.to_homogeneous().into(),
-        view_proj,
-        view_inverse,
-        proj_inverse,
-    };
-
-    base.uniforms_buffer
-        .as_mut()
-        .unwrap()
-        .store(bytes_of(&uniform_buffer_data), &base.device);
+    update_camera(&mut base, eye, target);
 
     let main_loop = |base: &mut AppBase<'_>| {
         if base.resized {

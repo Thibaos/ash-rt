@@ -18,8 +18,6 @@ use crate::utils::{
 #[repr(C)]
 #[derive(Clone, Debug, Copy, Pod, Zeroable)]
 pub struct GlobalUniforms {
-    pub origin: Vec4,
-    pub direction: Vec4,
     pub view_proj: Mat4,    // Camera view * projection
     pub view_inverse: Mat4, // Camera inverse view matrix
     pub proj_inverse: Mat4, // Camera inverse projection matrix

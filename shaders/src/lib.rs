@@ -21,8 +21,6 @@ pub struct Aabb {
 // Uniform buffer set at each frame
 #[repr(C)]
 pub struct GlobalUniforms {
-    pub origin: Vec3,
-    pub direction: Vec3,
     pub view_proj: Mat4,    // Camera view * projection
     pub view_inverse: Mat4, // Camera inverse view matrix
     pub proj_inverse: Mat4, // Camera inverse projection matrix
