@@ -18,7 +18,11 @@ use winit::{
 fn update_camera(base: &mut AppBase, eye: Vec3, direction: Vec3) {
     let view_matrix = look_at_rh(&eye, &direction, &Vec3::y());
 
-    let proj_matrix = infinite_perspective_rh_zo(WIDTH as f32 / HEIGHT as f32, 3.14 / 2.0, 0.1);
+    let resolution = base.surface_resolution;
+    let width = resolution.width as f32;
+    let height = resolution.height as f32;
+
+    let proj_matrix = infinite_perspective_rh_zo(width / height, 3.14 / 2.0, 0.1);
 
     let view_proj = view_matrix * proj_matrix;
     let view_inverse = inverse(&view_matrix);
@@ -60,13 +64,22 @@ fn main() {
 
     update_camera(&mut base, eye, target);
 
+    let start = std::time::Instant::now();
+
     let main_loop = |base: &mut AppBase<'_>| {
         if base.resized {
             base.recreate_swapchain().unwrap();
             base.resized = false;
         }
 
+        let now = start.elapsed().as_secs_f32();
+
+        let direction = glm::rotate_y_vec3::<f32>(&Vec3::z(), now);
+
+        update_camera(base, eye, direction);
+
         let (present_index, _) = unsafe {
+            base.window.request_redraw();
             base.swapchain_loader.acquire_next_image(
                 base.swapchain.unwrap(),
                 std::u64::MAX,
@@ -388,7 +401,10 @@ fn main() {
                 event: WindowEvent::Resized(_),
                 ..
             } => base.resized = true,
-            Event::AboutToWait => main_loop(&mut base),
+            Event::WindowEvent {
+                event: WindowEvent::RedrawRequested,
+                ..
+            } => main_loop(&mut base),
             _ => (),
         })
         .unwrap();
