@@ -22,7 +22,7 @@ fn update_camera(base: &mut AppBase, eye: Vec3, direction: Vec3) {
     let width = resolution.width as f32;
     let height = resolution.height as f32;
 
-    let proj_matrix = infinite_perspective_rh_zo(width / height, 3.14 / 2.0, 0.1);
+    let proj_matrix = infinite_perspective_rh_zo(width / height, 3.14 / 2.5, 0.1);
 
     let view_proj = view_matrix * proj_matrix;
     let view_inverse = inverse(&view_matrix);
@@ -74,12 +74,13 @@ fn main() {
 
         let now = start.elapsed().as_secs_f32();
 
-        let direction = glm::rotate_y_vec3::<f32>(&Vec3::z(), now);
+        let eye_target = eye - Vec3::z();
 
-        update_camera(base, eye, direction);
+        let target = glm::rotate_vec3::<f32>(&eye_target, now, &Vec3::y());
+
+        update_camera(base, eye, target);
 
         let (present_index, _) = unsafe {
-            base.window.request_redraw();
             base.swapchain_loader.acquire_next_image(
                 base.swapchain.unwrap(),
                 std::u64::MAX,
@@ -379,6 +380,8 @@ fn main() {
                 }
             }
         }
+
+        base.window.request_redraw();
     };
 
     event_loop
