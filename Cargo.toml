@@ -1,2 +1,20 @@
-[workspace]
-members = ["rt", "shaders"]
+[package]
+name = "ash-rt"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ash = { version = "0.38", default-features = false, features = [
+    "linked",
+    "debug",
+] }
+ash-window = "0.13"
+winit = { version = "0.29" }
+png = "0.17"
+image = "0.24"
+raw-window-handle = "0.6"
+anyhow = "1.0.82"
+bytemuck = { version = "1.15.0", features = ["derive"] }
+nalgebra-glm = { version = "0.18.0", features = ["convert-bytemuck"] }
+vulkano = { version = "0.34.1", features = ["macros"] }
+vulkano-shaders = "0.34.0"

@@ -192,7 +192,7 @@ pub fn get_memory_type_index(
 pub struct BufferResource {
     pub buffer: vk::Buffer,
     pub memory: vk::DeviceMemory,
-    size: vk::DeviceSize,
+    pub size: vk::DeviceSize,
 }
 
 impl BufferResource {

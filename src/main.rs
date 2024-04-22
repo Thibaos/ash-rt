@@ -3,7 +3,7 @@ mod utils;
 
 extern crate nalgebra_glm as glm;
 
-use ash::vk;
+use ash::vk::{self, CommandBufferUsageFlags};
 use base::{AppBase, GlobalUniforms};
 use bytemuck::bytes_of;
 use glm::{infinite_perspective_rh_zo, inverse, look_at_rh, Vec3};
@@ -15,7 +15,12 @@ use winit::{
     platform::run_on_demand::EventLoopExtRunOnDemand,
 };
 
-fn update_camera(base: &mut AppBase, eye: Vec3, direction: Vec3) {
+fn update_camera(
+    base: &mut AppBase,
+    eye: Vec3,
+    direction: Vec3,
+    command_buffer: vk::CommandBuffer,
+) {
     let view_matrix = look_at_rh(&eye, &direction, &Vec3::y());
 
     let resolution = base.surface_resolution;
@@ -34,10 +39,67 @@ fn update_camera(base: &mut AppBase, eye: Vec3, direction: Vec3) {
         proj_inverse,
     };
 
-    base.uniforms_buffer
-        .as_mut()
-        .unwrap()
-        .store(bytes_of(&uniform_buffer_data), &base.device);
+    let uniforms_buffer = base.uniforms_buffer.as_mut().unwrap();
+
+    unsafe {
+        let buffer_barrier = vk::BufferMemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::SHADER_READ)
+            .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .buffer(uniforms_buffer.buffer)
+            .size(uniforms_buffer.size);
+
+        base.device.cmd_pipeline_barrier(
+            command_buffer,
+            vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::DEVICE_GROUP,
+            &[],
+            &[buffer_barrier],
+            &[],
+        );
+    }
+
+    unsafe {
+        base.device.cmd_update_buffer(
+            command_buffer,
+            uniforms_buffer.buffer,
+            0,
+            bytes_of(&uniform_buffer_data),
+        )
+    }
+
+    // let buffer_info = [vk::DescriptorBufferInfo::default()
+    //     .range(vk::WHOLE_SIZE)
+    //     .buffer(uniforms_buffer.buffer)];
+
+    // let buffer_write = vk::WriteDescriptorSet::default()
+    //     .dst_set(base.uniforms_descriptor_set.unwrap())
+    //     .dst_binding(0)
+    //     .descriptor_count(1)
+    //     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+    //     .buffer_info(&buffer_info);
+
+    // unsafe {
+    //     base.device.update_descriptor_sets(&[buffer_write], &[]);
+    // }
+
+    unsafe {
+        let buffer_barrier = vk::BufferMemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ)
+            .buffer(uniforms_buffer.buffer)
+            .size(uniforms_buffer.size);
+
+        base.device.cmd_pipeline_barrier(
+            command_buffer,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+            vk::DependencyFlags::DEVICE_GROUP,
+            &[],
+            &[buffer_barrier],
+            &[],
+        );
+    }
 }
 
 fn main() {
@@ -60,32 +122,64 @@ fn main() {
     };
 
     let eye = Vec3::new(0.0, 0.0, -2.0);
-    let target = Vec3::new(0.0, 0.0, 1.0);
 
-    update_camera(&mut base, eye, target);
+    unsafe {
+        let begin_info =
+            vk::CommandBufferBeginInfo::default().flags(CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+        base.device
+            .begin_command_buffer(rt_command_buffer, &begin_info)
+            .unwrap();
+    }
+
+    unsafe {
+        base.device.end_command_buffer(rt_command_buffer).unwrap();
+    }
 
     let start = std::time::Instant::now();
+    let mut second_timer = std::time::Instant::now();
+    let mut frames_this_second: u64 = 0;
 
-    let main_loop = |base: &mut AppBase<'_>| {
+    let mut main_loop = |base: &mut AppBase<'_>| {
+        unsafe {
+            base.device
+                .wait_for_fences(&[base.swapchain_acquire_fence], true, std::u64::MAX)
+                .expect("Wait for fence failed.");
+
+            base.device
+                .reset_fences(&[base.swapchain_acquire_fence])
+                .expect("Reset fences failed.");
+        }
+
         if base.resized {
             base.recreate_swapchain().unwrap();
             base.resized = false;
         }
 
-        let now = start.elapsed().as_secs_f32();
+        frames_this_second += 1;
+
+        let loop_now = std::time::Instant::now();
+
+        if loop_now.duration_since(second_timer).as_secs() > 0 {
+            second_timer = loop_now;
+            println!("{frames_this_second}fps");
+            frames_this_second = 0;
+        }
 
         let eye_target = eye - Vec3::z();
 
-        let target = glm::rotate_vec3::<f32>(&eye_target, now, &Vec3::y());
-
-        update_camera(base, eye, target);
+        let target = glm::rotate_vec3::<f32>(
+            &eye_target,
+            3.14 + start.elapsed().as_secs_f32(),
+            &Vec3::y(),
+        );
 
         let (present_index, _) = unsafe {
             base.swapchain_loader.acquire_next_image(
                 base.swapchain.unwrap(),
                 std::u64::MAX,
                 base.present_complete_semaphore,
-                vk::Fence::null(),
+                base.swapchain_acquire_fence,
             )
         }
         .unwrap();
@@ -161,6 +255,8 @@ fn main() {
             base.device
                 .begin_command_buffer(rt_command_buffer, &rt_command_buffer_begin_info)
                 .expect("Begin commandbuffer");
+
+            update_camera(base, eye, target, rt_command_buffer);
 
             // full rt pass
             {
@@ -365,7 +461,7 @@ fn main() {
         let swapchains = [base.swapchain.unwrap()];
         let image_indices = [present_index];
         let present_info = vk::PresentInfoKHR::default()
-            .wait_semaphores(&wait_semaphors) // &base.rendering_complete_semaphore)
+            .wait_semaphores(&wait_semaphors)
             .swapchains(&swapchains)
             .image_indices(&image_indices);
 

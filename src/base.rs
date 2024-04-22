@@ -3,7 +3,7 @@ extern crate winit;
 
 use ash::{ext, khr, vk, Device, Entry, Instance};
 use bytemuck::{bytes_of, Pod, Zeroable};
-use glm::{Mat4, Vec4};
+use glm::{Mat4, Vec3};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::{default::Default, ffi::CStr, ops::Drop, os::raw::c_char};
 
@@ -73,6 +73,7 @@ pub struct AppBase<'a> {
 
     pub draw_commands_reuse_fence: vk::Fence,
     pub setup_commands_reuse_fence: vk::Fence,
+    pub swapchain_acquire_fence: vk::Fence,
 
     pub resized: bool,
 
@@ -995,7 +996,7 @@ impl AppBase<'_> {
     }
 
     pub fn create_colors_buffer(&mut self) {
-        let colors = [Vec4::x(), Vec4::y(), Vec4::z()];
+        let colors = [Vec3::x(), Vec3::y(), Vec3::z()];
         let data = bytes_of(&colors);
 
         let mut colors_buffer = BufferResource::new(
@@ -1104,9 +1105,15 @@ impl AppBase<'_> {
             descriptor_count: 1,
         }];
 
-        const SHADER: &[u8] = include_bytes!(env!("shaders.spv"));
+        const RGEN_SHADER: &[u8] = include_bytes!("..\\shaders\\spv\\rgen.spv");
+        const RCHIT_SHADER: &[u8] = include_bytes!("..\\shaders\\spv\\rchit.spv");
+        const RMISS_SHADER: &[u8] = include_bytes!("..\\shaders\\spv\\rmiss.spv");
+        const RINT_SHADER: &[u8] = include_bytes!("..\\shaders\\spv\\rint.spv");
 
-        let shader_module = unsafe { create_shader_module(&self.device, SHADER) }?;
+        let rgen_module = unsafe { create_shader_module(&self.device, RGEN_SHADER) }?;
+        let rchit_module = unsafe { create_shader_module(&self.device, RCHIT_SHADER) }?;
+        let rmiss_module = unsafe { create_shader_module(&self.device, RMISS_SHADER) }?;
+        let rint_module = unsafe { create_shader_module(&self.device, RINT_SHADER) }?;
 
         let uniforms_binding_flags_inner = [vk::DescriptorBindingFlagsEXT::empty()];
 
@@ -1172,22 +1179,20 @@ impl AppBase<'_> {
         let shader_stages = vec![
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::RAYGEN_KHR)
-                .module(shader_module)
-                .name(std::ffi::CStr::from_bytes_with_nul(
-                    b"main_ray_generation\0",
-                )?),
+                .module(rgen_module)
+                .name(std::ffi::CStr::from_bytes_with_nul(b"main\0")?),
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-                .module(shader_module)
-                .name(std::ffi::CStr::from_bytes_with_nul(b"main_closest_hit\0")?),
+                .module(rchit_module)
+                .name(std::ffi::CStr::from_bytes_with_nul(b"main\0")?),
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::INTERSECTION_KHR)
-                .module(shader_module)
-                .name(std::ffi::CStr::from_bytes_with_nul(b"main_intersection\0")?),
+                .module(rint_module)
+                .name(std::ffi::CStr::from_bytes_with_nul(b"main\0")?),
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::MISS_KHR)
-                .module(shader_module)
-                .name(std::ffi::CStr::from_bytes_with_nul(b"main_miss\0")?),
+                .module(rmiss_module)
+                .name(std::ffi::CStr::from_bytes_with_nul(b"main\0")?),
         ];
 
         let pipeline = unsafe {
@@ -1206,7 +1211,10 @@ impl AppBase<'_> {
         .unwrap()[0];
 
         unsafe {
-            self.device.destroy_shader_module(shader_module, None);
+            self.device.destroy_shader_module(rgen_module, None);
+            self.device.destroy_shader_module(rchit_module, None);
+            self.device.destroy_shader_module(rmiss_module, None);
+            self.device.destroy_shader_module(rint_module, None);
         }
 
         let rt_descriptor_sets = unsafe {
@@ -1503,6 +1511,7 @@ impl AppBase<'_> {
             };
 
             let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
+                .scalar_block_layout(true)
                 .buffer_device_address(true)
                 .vulkan_memory_model(true);
 
@@ -1607,6 +1616,8 @@ impl AppBase<'_> {
             unsafe { device.create_fence(&fence_create_info, None) }.expect("Create fence failed.");
         let setup_commands_reuse_fence =
             unsafe { device.create_fence(&fence_create_info, None) }.expect("Create fence failed.");
+        let swapchain_acquire_fence =
+            unsafe { device.create_fence(&fence_create_info, None) }.expect("Create fence failed.");
 
         let semaphore_create_info = vk::SemaphoreCreateInfo::default();
 
@@ -1647,6 +1658,7 @@ impl AppBase<'_> {
             rendering_complete_semaphore,
             draw_commands_reuse_fence,
             setup_commands_reuse_fence,
+            swapchain_acquire_fence,
             surface,
             debug_call_back,
             debug_utils_loader,
@@ -1716,6 +1728,10 @@ macro_rules! destroy_buffer {
 impl Drop for AppBase<'_> {
     fn drop(&mut self) {
         unsafe {
+            self.device
+                .wait_for_fences(&[self.swapchain_acquire_fence], true, std::u64::MAX)
+                .unwrap();
+
             self.device.device_wait_idle().unwrap();
             self.device
                 .destroy_semaphore(self.present_complete_semaphore, None);
@@ -1725,6 +1741,8 @@ impl Drop for AppBase<'_> {
                 .destroy_fence(self.draw_commands_reuse_fence, None);
             self.device
                 .destroy_fence(self.setup_commands_reuse_fence, None);
+            self.device
+                .destroy_fence(self.swapchain_acquire_fence, None);
 
             self.cleanup_swapchain().unwrap();
 
