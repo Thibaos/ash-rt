@@ -6,22 +6,18 @@ extern crate nalgebra_glm as glm;
 use ash::vk::{self, CommandBufferUsageFlags};
 use base::{AppBase, GlobalUniforms};
 use bytemuck::bytes_of;
-use glm::{infinite_perspective_rh_zo, inverse, look_at_rh, Vec3};
+use glm::{infinite_perspective_rh_zo, inverse};
 use utils::{HEIGHT, WIDTH};
 use winit::{
-    event::{ElementState, Event, KeyEvent, WindowEvent},
+    event::{DeviceEvent, ElementState, Event, KeyEvent, MouseButton, WindowEvent},
     event_loop::EventLoop,
     keyboard,
     platform::run_on_demand::EventLoopExtRunOnDemand,
 };
 
-fn update_camera(
-    base: &mut AppBase,
-    eye: Vec3,
-    direction: Vec3,
-    command_buffer: vk::CommandBuffer,
-) {
-    let view_matrix = look_at_rh(&eye, &direction, &Vec3::y());
+fn update_camera(base: &mut AppBase, command_buffer: vk::CommandBuffer) {
+    // let view_matrix = look_at_rh(&base.camera.eye, &base.camera.direction, &Vec3::y());
+    let view_matrix = base.camera.view;
 
     let resolution = base.surface_resolution;
     let width = resolution.width as f32;
@@ -68,21 +64,6 @@ fn update_camera(
         )
     }
 
-    // let buffer_info = [vk::DescriptorBufferInfo::default()
-    //     .range(vk::WHOLE_SIZE)
-    //     .buffer(uniforms_buffer.buffer)];
-
-    // let buffer_write = vk::WriteDescriptorSet::default()
-    //     .dst_set(base.uniforms_descriptor_set.unwrap())
-    //     .dst_binding(0)
-    //     .descriptor_count(1)
-    //     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-    //     .buffer_info(&buffer_info);
-
-    // unsafe {
-    //     base.device.update_descriptor_sets(&[buffer_write], &[]);
-    // }
-
     unsafe {
         let buffer_barrier = vk::BufferMemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
@@ -99,6 +80,22 @@ fn update_camera(
             &[buffer_barrier],
             &[],
         );
+    }
+}
+
+fn toggle_capture_mouse(base: &mut AppBase) {
+    if base.focused {
+        base.focused = false;
+        base.window
+            .set_cursor_grab(winit::window::CursorGrabMode::None)
+            .unwrap();
+        base.window.set_cursor_visible(true);
+    } else {
+        base.focused = true;
+        base.window
+            .set_cursor_grab(winit::window::CursorGrabMode::Confined)
+            .unwrap();
+        base.window.set_cursor_visible(false);
     }
 }
 
@@ -121,8 +118,6 @@ fn main() {
         .expect("Failed to allocate Command Buffers!")[0]
     };
 
-    let eye = Vec3::new(0.0, 0.0, -2.0);
-
     unsafe {
         let begin_info =
             vk::CommandBufferBeginInfo::default().flags(CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -136,9 +131,7 @@ fn main() {
         base.device.end_command_buffer(rt_command_buffer).unwrap();
     }
 
-    let start = std::time::Instant::now();
-    let mut second_timer = std::time::Instant::now();
-    let mut frames_this_second: u64 = 0;
+    let mut frame_start = std::time::Instant::now();
 
     let mut main_loop = |base: &mut AppBase<'_>| {
         unsafe {
@@ -156,23 +149,16 @@ fn main() {
             base.resized = false;
         }
 
-        frames_this_second += 1;
+        base.current_frames_counter += 1;
 
-        let loop_now = std::time::Instant::now();
+        frame_start = std::time::Instant::now();
 
-        if loop_now.duration_since(second_timer).as_secs() > 0 {
-            second_timer = loop_now;
-            println!("{frames_this_second}fps");
-            frames_this_second = 0;
+        base.update_delta_time();
+
+        if frame_start.duration_since(base.last_second).as_secs() > 0 {
+            // println!("{}fps", base.current_frames_counter);
+            base.reset_fps_counter();
         }
-
-        let eye_target = eye - Vec3::z();
-
-        let target = glm::rotate_vec3::<f32>(
-            &eye_target,
-            3.14 + start.elapsed().as_secs_f32(),
-            &Vec3::y(),
-        );
 
         let (present_index, _) = unsafe {
             base.swapchain_loader.acquire_next_image(
@@ -184,26 +170,6 @@ fn main() {
         }
         .unwrap();
 
-        let clear_values = [
-            vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: [0.0, 0.0, 0.0, 0.0],
-                },
-            },
-            vk::ClearValue {
-                depth_stencil: vk::ClearDepthStencilValue {
-                    depth: 1.0,
-                    stencil: 0,
-                },
-            },
-        ];
-
-        let render_pass_begin_info = vk::RenderPassBeginInfo::default()
-            .render_pass(base.render_pass.unwrap())
-            .framebuffer(base.framebuffers.as_ref().unwrap()[present_index as usize])
-            .render_area(base.surface_resolution.into())
-            .clear_values(&clear_values);
-
         let current_swapchain_image = base.present_images.as_ref().unwrap()[present_index as usize];
 
         unsafe {
@@ -214,33 +180,6 @@ fn main() {
             base.device
                 .reset_fences(&[base.draw_commands_reuse_fence])
                 .expect("Reset fences failed.");
-
-            base.device
-                .reset_command_buffer(
-                    base.draw_command_buffer,
-                    vk::CommandBufferResetFlags::RELEASE_RESOURCES,
-                )
-                .expect("Reset command buffer failed.");
-
-            let command_buffer_begin_info = vk::CommandBufferBeginInfo::default()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
-            base.device
-                .begin_command_buffer(base.draw_command_buffer, &command_buffer_begin_info)
-                .expect("Begin commandbuffer");
-
-            {
-                base.device.cmd_begin_render_pass(
-                    base.draw_command_buffer,
-                    &render_pass_begin_info,
-                    vk::SubpassContents::INLINE,
-                );
-                base.device.cmd_end_render_pass(base.draw_command_buffer);
-            }
-
-            base.device
-                .end_command_buffer(base.draw_command_buffer)
-                .expect("End commandbuffer");
 
             base.device
                 .reset_command_buffer(
@@ -256,7 +195,7 @@ fn main() {
                 .begin_command_buffer(rt_command_buffer, &rt_command_buffer_begin_info)
                 .expect("Begin commandbuffer");
 
-            update_camera(base, eye, target, rt_command_buffer);
+            update_camera(base, rt_command_buffer);
 
             // full rt pass
             {
@@ -438,7 +377,7 @@ fn main() {
                 .end_command_buffer(rt_command_buffer)
                 .expect("End commandbuffer");
 
-            let command_buffers = vec![base.draw_command_buffer, rt_command_buffer];
+            let command_buffers = vec![rt_command_buffer];
             let wait_semaphores = &[base.present_complete_semaphore];
             let signal_semaphores = &[base.rendering_complete_semaphore];
 
@@ -500,6 +439,19 @@ fn main() {
                 event: WindowEvent::Resized(_),
                 ..
             } => base.resized = true,
+            Event::WindowEvent {
+                event:
+                    WindowEvent::MouseInput {
+                        state: ElementState::Pressed,
+                        button: MouseButton::Right,
+                        ..
+                    },
+                ..
+            } => toggle_capture_mouse(&mut base),
+            Event::DeviceEvent {
+                event: DeviceEvent::MouseMotion { delta },
+                ..
+            } => base.update_look_position(delta),
             Event::WindowEvent {
                 event: WindowEvent::RedrawRequested,
                 ..

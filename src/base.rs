@@ -3,7 +3,7 @@ extern crate winit;
 
 use ash::{ext, khr, vk, Device, Entry, Instance};
 use bytemuck::{bytes_of, Pod, Zeroable};
-use glm::{Mat4, Vec3};
+use glm::{look_at_rh, rotate_x, rotate_y, Mat4, Vec3};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::{default::Default, ffi::CStr, ops::Drop, os::raw::c_char};
 
@@ -21,6 +21,13 @@ pub struct GlobalUniforms {
     pub view_proj: Mat4,    // Camera view * projection
     pub view_inverse: Mat4, // Camera inverse view matrix
     pub proj_inverse: Mat4, // Camera inverse projection matrix
+}
+
+pub struct CameraTransform {
+    pub translation: Vec3,
+    pub direction: Vec3,
+    pub rotation: Vec3,
+    pub view: Mat4,
 }
 
 pub struct AppBase<'a> {
@@ -76,6 +83,7 @@ pub struct AppBase<'a> {
     pub swapchain_acquire_fence: vk::Fence,
 
     pub resized: bool,
+    pub focused: bool,
 
     pub as_geometry: Option<vk::AccelerationStructureGeometryKHR<'a>>,
     pub aabb_buffer: Option<BufferResource>,
@@ -107,6 +115,13 @@ pub struct AppBase<'a> {
     pub sbt_miss_region: Option<vk::StridedDeviceAddressRegionKHR>,
     pub sbt_hit_region: Option<vk::StridedDeviceAddressRegionKHR>,
     pub sbt_call_region: Option<vk::StridedDeviceAddressRegionKHR>,
+
+    pub current_frames_counter: u64,
+    pub last_second: std::time::Instant,
+    pub last_frame_update: std::time::Instant,
+    pub delta_time: std::time::Duration,
+
+    pub camera: CameraTransform,
 }
 
 impl AppBase<'_> {
@@ -1411,6 +1426,29 @@ impl AppBase<'_> {
         Ok(())
     }
 
+    pub fn reset_fps_counter(&mut self) {
+        self.last_second = std::time::Instant::now();
+        self.current_frames_counter = 0;
+    }
+
+    pub fn update_delta_time(&mut self) {
+        let now = std::time::Instant::now();
+        let delta = now.duration_since(self.last_frame_update);
+        self.last_frame_update = now;
+        self.delta_time = delta;
+    }
+
+    pub fn update_look_position(&mut self, delta: (f64, f64)) {
+        if self.focused {
+            let delta_time = self.delta_time.as_secs_f64();
+            let x = delta.0 * delta_time;
+            let y = delta.1 * delta_time;
+
+            self.camera.view = rotate_y(&self.camera.view, x as f32);
+            self.camera.view = rotate_x(&self.camera.view, y as f32);
+        }
+    }
+
     pub fn new(event_loop: &EventLoop<()>, window_width: u32, window_height: u32) -> Self {
         let window = WindowBuilder::new()
             .with_title("RT")
@@ -1634,6 +1672,13 @@ impl AppBase<'_> {
 
         let graphics_queue = unsafe { device.get_device_queue(queue_family_index, 0) };
 
+        let camera = CameraTransform {
+            translation: Vec3::new(0.0, 0.0, -2.0),
+            direction: Vec3::z(),
+            rotation: Vec3::zeros(),
+            view: look_at_rh(&Vec3::new(0.0, 0.0, -2.0), &Vec3::z(), &Vec3::y()),
+        };
+
         AppBase {
             entry,
             ray_tracing_pipeline_loader,
@@ -1665,6 +1710,11 @@ impl AppBase<'_> {
             desired_image_count,
             pre_transform,
             present_mode,
+            current_frames_counter: 0,
+            last_frame_update: std::time::Instant::now(),
+            last_second: std::time::Instant::now(),
+            delta_time: std::time::Duration::ZERO,
+            camera,
             swapchain: None,
             present_images: None,
             present_image_views: None,
@@ -1677,6 +1727,7 @@ impl AppBase<'_> {
             render_pass: None,
             framebuffers: None,
             resized: false,
+            focused: false,
             as_geometry: None,
             aabb_buffer: None,
             bottom_as: None,
