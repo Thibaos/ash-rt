@@ -25,8 +25,8 @@ pub struct GlobalUniforms {
 
 pub struct CameraTransform {
     pub translation: Vec3,
-    pub rotation: Vec3,
-    pub view: Mat4,
+    pub global_rotation: Vec3,
+    pub local_rotation: Vec3,
 }
 
 macro_rules! destroy_buffer {
@@ -125,6 +125,7 @@ pub struct AppBase<'a> {
     pub sbt_hit_region: Option<vk::StridedDeviceAddressRegionKHR>,
     pub sbt_call_region: Option<vk::StridedDeviceAddressRegionKHR>,
 
+    pub start: std::time::Instant,
     pub current_frames_counter: u64,
     pub last_second: std::time::Instant,
     pub last_frame_update: std::time::Instant,
@@ -1457,8 +1458,9 @@ impl AppBase<'_> {
             let x = delta.0 as f32 * self.sensitivity;
             let y = delta.1 as f32 * self.sensitivity;
 
-            self.camera.view = glm::rotate_y(&self.camera.view, x);
-            self.camera.view = glm::rotate_x(&self.camera.view, y);
+            self.camera.global_rotation.y -= x;
+            self.camera.local_rotation.z =
+                (self.camera.local_rotation.z + y).clamp(-glm::half_pi::<f32>(), glm::half_pi());
         }
     }
 
@@ -1688,8 +1690,8 @@ impl AppBase<'_> {
 
         let camera = CameraTransform {
             translation: Vec3::new(0.0, 0.0, -2.0),
-            rotation: Vec3::new(glm::pi(), 0.0, 0.0),
-            view: glm::look_at_rh(&Vec3::new(0.0, 0.0, -2.0), &Vec3::z(), &Vec3::y()),
+            global_rotation: Vec3::new(glm::pi(), 0.0, glm::pi()),
+            local_rotation: Vec3::new(0.0, 0.0, 0.0),
         };
 
         AppBase {
@@ -1724,6 +1726,7 @@ impl AppBase<'_> {
             pre_transform,
             present_mode,
             current_frames_counter: 0,
+            start: std::time::Instant::now(),
             last_frame_update: std::time::Instant::now(),
             last_second: std::time::Instant::now(),
             delta_time: std::time::Duration::ZERO,

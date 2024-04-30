@@ -18,23 +18,22 @@ use winit::{
 };
 
 fn update_camera(base: &mut AppBase, command_buffer: vk::CommandBuffer) {
-    // let view_matrix = look_at_rh(&base.camera.eye, &base.camera.direction, &Vec3::y());
+    let elapsed = base.start.elapsed().as_secs_f32();
+    base.camera.translation.y = elapsed.sin();
+    base.camera.translation.x = elapsed.cos();
 
-    let yaw = base.camera.rotation.x;
-    let pitch = base.camera.rotation.y;
-    let _roll = base.camera.rotation.z;
+    let global_yaw = base.camera.global_rotation.x;
+    let global_pitch = base.camera.global_rotation.y;
+    let global_roll = base.camera.global_rotation.z;
 
-    let x = yaw.sin() * pitch.cos();
-    let y = yaw.sin() * pitch.cos();
-    let z = yaw.cos();
+    let local_yaw = base.camera.local_rotation.x;
+    let local_pitch = base.camera.local_rotation.y;
+    let local_roll = base.camera.local_rotation.z;
 
-    let direction = glm::Vec3::new(x, y, z);
-
-    let target = base.camera.translation - direction;
-
-    let view_matrix = base.camera.view;
-    // let view_matrix = glm::Mat4::from_euler_angles(roll, pitch, yaw)
-    //     .prepend_translation(&-base.camera.translation);
+    let local_view = glm::Mat4::from_euler_angles(local_roll, local_pitch, local_yaw);
+    let view_matrix = local_view
+        * glm::Mat4::from_euler_angles(global_roll, global_pitch, global_yaw)
+            .prepend_translation(&-base.camera.translation);
 
     let proj_matrix = infinite_perspective_rh_zo(base.aspect_ratio(), glm::pi::<f32>() / 2.5, 0.1);
 
