@@ -3,11 +3,11 @@ extern crate winit;
 
 use ash::{ext, khr, vk, Device, Entry, Instance};
 use bytemuck::{bytes_of, Pod, Zeroable};
-use glm::{look_at_rh, rotate_x, rotate_y, Mat4, Vec3};
+use glm::{Mat4, Vec3};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::{default::Default, ffi::CStr, ops::Drop, os::raw::c_char};
 
-use winit::{event_loop::EventLoop, window::WindowBuilder};
+use winit::{event_loop::ActiveEventLoop, window::Window};
 
 use crate::utils::{
     aligned_size, create_shader_module, find_memorytype_index, get_buffer_device_address,
@@ -25,9 +25,18 @@ pub struct GlobalUniforms {
 
 pub struct CameraTransform {
     pub translation: Vec3,
-    pub direction: Vec3,
     pub rotation: Vec3,
     pub view: Mat4,
+}
+
+macro_rules! destroy_buffer {
+    ($($buffer_option: expr, $device: expr), *) => {
+        $(
+        let unwrap_result = $buffer_option.as_ref().unwrap();
+        $device.destroy_buffer(unwrap_result.buffer, None);
+        $device.free_memory(unwrap_result.memory, None);
+    )*
+    };
 }
 
 pub struct AppBase<'a> {
@@ -122,9 +131,14 @@ pub struct AppBase<'a> {
     pub delta_time: std::time::Duration,
 
     pub camera: CameraTransform,
+    pub sensitivity: f32,
 }
 
 impl AppBase<'_> {
+    pub fn aspect_ratio(&self) -> f32 {
+        self.surface_resolution.width as f32 / self.surface_resolution.height as f32
+    }
+
     pub fn cleanup_swapchain(&self) -> anyhow::Result<()> {
         unsafe {
             self.device
@@ -1440,24 +1454,24 @@ impl AppBase<'_> {
 
     pub fn update_look_position(&mut self, delta: (f64, f64)) {
         if self.focused {
-            let delta_time = self.delta_time.as_secs_f64();
-            let x = delta.0 * delta_time;
-            let y = delta.1 * delta_time;
+            let x = delta.0 as f32 * self.sensitivity;
+            let y = delta.1 as f32 * self.sensitivity;
 
-            self.camera.view = rotate_y(&self.camera.view, x as f32);
-            self.camera.view = rotate_x(&self.camera.view, y as f32);
+            self.camera.view = glm::rotate_y(&self.camera.view, x);
+            self.camera.view = glm::rotate_x(&self.camera.view, y);
         }
     }
 
-    pub fn new(event_loop: &EventLoop<()>, window_width: u32, window_height: u32) -> Self {
-        let window = WindowBuilder::new()
+    pub fn new(event_loop: &ActiveEventLoop, window_width: u32, window_height: u32) -> Self {
+        let window_attributes = Window::default_attributes()
             .with_title("RT")
             .with_inner_size(winit::dpi::PhysicalSize::new(
                 f64::from(window_width),
                 f64::from(window_height),
-            ))
-            .build(event_loop)
-            .unwrap();
+            ));
+
+        let window = event_loop.create_window(window_attributes).unwrap();
+
         let entry = Entry::linked();
         let app_name = unsafe { CStr::from_bytes_with_nul_unchecked(b"VulkanRT\0") };
 
@@ -1674,9 +1688,8 @@ impl AppBase<'_> {
 
         let camera = CameraTransform {
             translation: Vec3::new(0.0, 0.0, -2.0),
-            direction: Vec3::z(),
-            rotation: Vec3::zeros(),
-            view: look_at_rh(&Vec3::new(0.0, 0.0, -2.0), &Vec3::z(), &Vec3::y()),
+            rotation: Vec3::new(glm::pi(), 0.0, 0.0),
+            view: glm::look_at_rh(&Vec3::new(0.0, 0.0, -2.0), &Vec3::z(), &Vec3::y()),
         };
 
         AppBase {
@@ -1715,6 +1728,7 @@ impl AppBase<'_> {
             last_second: std::time::Instant::now(),
             delta_time: std::time::Duration::ZERO,
             camera,
+            sensitivity: 0.001,
             swapchain: None,
             present_images: None,
             present_image_views: None,
@@ -1764,16 +1778,6 @@ impl AppBase<'_> {
         self.create_descriptor_sets().unwrap();
         self.create_rt_sbt().unwrap();
     }
-}
-
-macro_rules! destroy_buffer {
-    ($($buffer_option: expr, $device: expr), *) => {
-        $(
-        let unwrap_result = $buffer_option.as_ref().unwrap();
-        $device.destroy_buffer(unwrap_result.buffer, None);
-        $device.free_memory(unwrap_result.memory, None);
-    )*
-    };
 }
 
 impl Drop for AppBase<'_> {

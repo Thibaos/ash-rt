@@ -9,21 +9,34 @@ use bytemuck::bytes_of;
 use glm::{infinite_perspective_rh_zo, inverse};
 use utils::{HEIGHT, WIDTH};
 use winit::{
-    event::{DeviceEvent, ElementState, Event, KeyEvent, MouseButton, WindowEvent},
-    event_loop::EventLoop,
+    application::ApplicationHandler,
+    event::{DeviceEvent, ElementState, KeyEvent, MouseButton, WindowEvent},
+    event_loop::{ActiveEventLoop, EventLoop},
     keyboard,
     platform::run_on_demand::EventLoopExtRunOnDemand,
+    window::Window,
 };
 
 fn update_camera(base: &mut AppBase, command_buffer: vk::CommandBuffer) {
     // let view_matrix = look_at_rh(&base.camera.eye, &base.camera.direction, &Vec3::y());
+
+    let yaw = base.camera.rotation.x;
+    let pitch = base.camera.rotation.y;
+    let _roll = base.camera.rotation.z;
+
+    let x = yaw.sin() * pitch.cos();
+    let y = yaw.sin() * pitch.cos();
+    let z = yaw.cos();
+
+    let direction = glm::Vec3::new(x, y, z);
+
+    let target = base.camera.translation - direction;
+
     let view_matrix = base.camera.view;
+    // let view_matrix = glm::Mat4::from_euler_angles(roll, pitch, yaw)
+    //     .prepend_translation(&-base.camera.translation);
 
-    let resolution = base.surface_resolution;
-    let width = resolution.width as f32;
-    let height = resolution.height as f32;
-
-    let proj_matrix = infinite_perspective_rh_zo(width / height, 3.14 / 2.5, 0.1);
+    let proj_matrix = infinite_perspective_rh_zo(base.aspect_ratio(), glm::pi::<f32>() / 2.5, 0.1);
 
     let view_proj = view_matrix * proj_matrix;
     let view_inverse = inverse(&view_matrix);
@@ -99,41 +112,18 @@ fn toggle_capture_mouse(base: &mut AppBase) {
     }
 }
 
-fn main() {
-    let mut event_loop = EventLoop::new().unwrap();
+#[derive(Default)]
+struct App<'a> {
+    window: Option<Window>,
+    base: Option<AppBase<'a>>,
+    rt_command_buffer: Option<vk::CommandBuffer>,
+    frame_start: Option<std::time::Instant>,
+}
 
-    let mut base = AppBase::new(&event_loop, WIDTH, HEIGHT);
-    base.init();
-
-    let rt_command_buffer = {
-        let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
-            .command_buffer_count(1)
-            .command_pool(base.pool)
-            .level(vk::CommandBufferLevel::PRIMARY);
-
-        unsafe {
-            base.device
-                .allocate_command_buffers(&command_buffer_allocate_info)
-        }
-        .expect("Failed to allocate Command Buffers!")[0]
-    };
-
-    unsafe {
-        let begin_info =
-            vk::CommandBufferBeginInfo::default().flags(CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
-        base.device
-            .begin_command_buffer(rt_command_buffer, &begin_info)
-            .unwrap();
-    }
-
-    unsafe {
-        base.device.end_command_buffer(rt_command_buffer).unwrap();
-    }
-
-    let mut frame_start = std::time::Instant::now();
-
-    let mut main_loop = |base: &mut AppBase<'_>| {
+impl App<'static> {
+    fn main_loop(&mut self) {
+        let base = self.base.as_mut().unwrap();
+        let rt_command_buffer = self.rt_command_buffer.unwrap();
         unsafe {
             base.device
                 .wait_for_fences(&[base.swapchain_acquire_fence], true, std::u64::MAX)
@@ -151,11 +141,17 @@ fn main() {
 
         base.current_frames_counter += 1;
 
-        frame_start = std::time::Instant::now();
+        self.frame_start = Some(std::time::Instant::now());
 
         base.update_delta_time();
 
-        if frame_start.duration_since(base.last_second).as_secs() > 0 {
+        if self
+            .frame_start
+            .unwrap()
+            .duration_since(base.last_second)
+            .as_secs()
+            > 0
+        {
             // println!("{}fps", base.current_frames_counter);
             base.reset_fps_counter();
         }
@@ -417,46 +413,104 @@ fn main() {
         }
 
         base.window.request_redraw();
-    };
+    }
+}
 
-    event_loop
-        .run_on_demand(|event, window_target| match event {
-            Event::WindowEvent {
+impl ApplicationHandler for App<'static> {
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+        }
+    }
+
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.base.is_none() {
+            let mut app = AppBase::new(&event_loop, WIDTH, HEIGHT);
+            app.init();
+
+            let rt_command_buffer = {
+                let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
+                    .command_buffer_count(1)
+                    .command_pool(app.pool)
+                    .level(vk::CommandBufferLevel::PRIMARY);
+
+                unsafe {
+                    app.device
+                        .allocate_command_buffers(&command_buffer_allocate_info)
+                }
+                .expect("Failed to allocate Command Buffers!")[0]
+            };
+
+            self.rt_command_buffer = Some(rt_command_buffer);
+
+            unsafe {
+                let begin_info = vk::CommandBufferBeginInfo::default()
+                    .flags(CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+                app.device
+                    .begin_command_buffer(rt_command_buffer, &begin_info)
+                    .unwrap();
+            }
+
+            unsafe {
+                app.device.end_command_buffer(rt_command_buffer).unwrap();
+            }
+
+            self.base = Some(app);
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: winit::window::WindowId,
+        event: WindowEvent,
+    ) {
+        match event {
+            WindowEvent::CloseRequested
+            | WindowEvent::KeyboardInput {
                 event:
-                    WindowEvent::CloseRequested
-                    | WindowEvent::KeyboardInput {
-                        event:
-                            KeyEvent {
-                                state: ElementState::Pressed,
-                                logical_key: keyboard::Key::Named(keyboard::NamedKey::Escape),
-                                ..
-                            },
-                        ..
-                    },
-                ..
-            } => window_target.exit(),
-            Event::WindowEvent {
-                event: WindowEvent::Resized(_),
-                ..
-            } => base.resized = true,
-            Event::WindowEvent {
-                event:
-                    WindowEvent::MouseInput {
+                    KeyEvent {
                         state: ElementState::Pressed,
-                        button: MouseButton::Right,
+                        logical_key: keyboard::Key::Named(keyboard::NamedKey::Escape),
                         ..
                     },
                 ..
-            } => toggle_capture_mouse(&mut base),
-            Event::DeviceEvent {
-                event: DeviceEvent::MouseMotion { delta },
+            } => event_loop.exit(),
+            WindowEvent::Resized(_) => self.base.as_mut().unwrap().resized = true,
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Right,
                 ..
-            } => base.update_look_position(delta),
-            Event::WindowEvent {
-                event: WindowEvent::RedrawRequested,
-                ..
-            } => main_loop(&mut base),
+            } => toggle_capture_mouse(self.base.as_mut().unwrap()),
+            // Event::DeviceEvent {
+            //     event: DeviceEvent::MouseMotion { delta },
+            //     ..
+            // } => base.update_look_position(delta),
+            WindowEvent::RedrawRequested => self.main_loop(),
             _ => (),
-        })
-        .unwrap();
+        };
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        match event {
+            DeviceEvent::MouseMotion { delta } => {
+                self.base.as_mut().unwrap().update_look_position(delta)
+            }
+            _ => (),
+        };
+    }
+}
+
+fn main() {
+    let mut event_loop = EventLoop::new().unwrap();
+
+    let mut app = App::default();
+
+    event_loop.run_app_on_demand(&mut app).unwrap();
 }
