@@ -1,4 +1,5 @@
 mod base;
+mod player_controller;
 mod utils;
 
 extern crate nalgebra_glm as glm;
@@ -6,43 +7,52 @@ extern crate nalgebra_glm as glm;
 use ash::vk::{self, CommandBufferUsageFlags};
 use base::{AppBase, GlobalUniforms};
 use bytemuck::bytes_of;
-use glm::{infinite_perspective_rh_zo, inverse};
+use glm::inverse;
 use utils::{HEIGHT, WIDTH};
 use winit::{
     application::ApplicationHandler,
-    event::{DeviceEvent, ElementState, KeyEvent, MouseButton, WindowEvent},
+    event::{DeviceEvent, ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard,
-    platform::run_on_demand::EventLoopExtRunOnDemand,
     window::Window,
 };
 
 fn update_camera(base: &mut AppBase, command_buffer: vk::CommandBuffer) {
-    let elapsed = base.start.elapsed().as_secs_f32();
-    base.camera.translation.y = elapsed.sin();
-    base.camera.translation.x = elapsed.cos();
+    let local_z = base.camera.transform.local_z();
+    let forward = -bevy_math::Vec3::new(local_z.x, 0.0, local_z.z);
+    let right = bevy_math::Vec3::new(local_z.z, 0.0, -local_z.x);
 
-    let global_yaw = base.camera.global_rotation.x;
-    let global_pitch = base.camera.global_rotation.y;
-    let global_roll = base.camera.global_rotation.z;
+    let mut velocity = bevy_math::Vec3::ZERO;
 
-    let local_yaw = base.camera.local_rotation.x;
-    let local_pitch = base.camera.local_rotation.y;
-    let local_roll = base.camera.local_rotation.z;
+    if base.player_controller.forward {
+        velocity += forward;
+    } else if base.player_controller.backward {
+        velocity -= forward;
+    }
+    if base.player_controller.left {
+        velocity -= right;
+    } else if base.player_controller.right {
+        velocity += right;
+    }
+    if base.player_controller.up {
+        velocity += bevy_math::Vec3::Y;
+    } else if base.player_controller.down {
+        velocity -= bevy_math::Vec3::Y;
+    }
 
-    let local_view = glm::Mat4::from_euler_angles(local_roll, local_pitch, local_yaw);
-    let view_matrix = local_view
-        * glm::Mat4::from_euler_angles(global_roll, global_pitch, global_yaw)
-            .prepend_translation(&-base.camera.translation);
+    velocity = velocity.normalize_or_zero();
 
-    let proj_matrix = infinite_perspective_rh_zo(base.aspect_ratio(), glm::pi::<f32>() / 2.5, 0.1);
+    base.camera.transform.translation +=
+        velocity * base.delta_time.as_secs_f32() * base.player_controller.speed;
 
-    let view_proj = view_matrix * proj_matrix;
-    let view_inverse = inverse(&view_matrix);
+    let view_inverse = base.camera.transform.compute_matrix();
+
+    let proj_matrix = glm::perspective(base.aspect_ratio(), glm::pi::<f32>() / 2.5, 0.1, 1000.0);
+
+    // let view_proj = view_matrix * proj_matrix;
     let proj_inverse = inverse(&proj_matrix);
 
     let uniform_buffer_data = GlobalUniforms {
-        view_proj,
         view_inverse,
         proj_inverse,
     };
@@ -482,10 +492,21 @@ impl ApplicationHandler for App<'static> {
                 button: MouseButton::Right,
                 ..
             } => toggle_capture_mouse(self.base.as_mut().unwrap()),
-            // Event::DeviceEvent {
-            //     event: DeviceEvent::MouseMotion { delta },
-            //     ..
-            // } => base.update_look_position(delta),
+            WindowEvent::MouseWheel {
+                delta: MouseScrollDelta::LineDelta(_, y),
+                ..
+            } => self
+                .base
+                .as_mut()
+                .unwrap()
+                .player_controller
+                .handle_speed_change(y),
+            WindowEvent::KeyboardInput { event, .. } => self
+                .base
+                .as_mut()
+                .unwrap()
+                .player_controller
+                .handle_keyboard_event(event),
             WindowEvent::RedrawRequested => self.main_loop(),
             _ => (),
         };
@@ -507,9 +528,9 @@ impl ApplicationHandler for App<'static> {
 }
 
 fn main() {
-    let mut event_loop = EventLoop::new().unwrap();
+    let event_loop = EventLoop::new().unwrap();
 
     let mut app = App::default();
 
-    event_loop.run_app_on_demand(&mut app).unwrap();
+    event_loop.run_app(&mut app).unwrap();
 }

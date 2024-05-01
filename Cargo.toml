@@ -16,3 +16,5 @@ raw-window-handle = "0.6"
 anyhow = "1.0.82"
 bytemuck = { version = "1.15.0", features = ["derive"] }
 nalgebra-glm = { version = "0.18.0", features = ["convert-bytemuck"] }
+bevy_transform = "0.13.2"
+bevy_math = "0.13.2"

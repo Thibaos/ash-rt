@@ -2,31 +2,32 @@ extern crate ash;
 extern crate winit;
 
 use ash::{ext, khr, vk, Device, Entry, Instance};
+use bevy_transform::components::Transform;
 use bytemuck::{bytes_of, Pod, Zeroable};
-use glm::{Mat4, Vec3};
+use glm::Mat4;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::{default::Default, ffi::CStr, ops::Drop, os::raw::c_char};
 
 use winit::{event_loop::ActiveEventLoop, window::Window};
 
-use crate::utils::{
-    aligned_size, create_shader_module, find_memorytype_index, get_buffer_device_address,
-    get_memory_type_index, pick_physical_device_and_queue_family_indices,
-    record_submit_commandbuffer, vulkan_debug_callback, BufferResource,
+use crate::{
+    player_controller::PlayerController,
+    utils::{
+        aligned_size, create_shader_module, find_memorytype_index, get_buffer_device_address,
+        get_memory_type_index, pick_physical_device_and_queue_family_indices,
+        record_submit_commandbuffer, vulkan_debug_callback, BufferResource,
+    },
 };
 
 #[repr(C)]
 #[derive(Clone, Debug, Copy, Pod, Zeroable)]
 pub struct GlobalUniforms {
-    pub view_proj: Mat4,    // Camera view * projection
-    pub view_inverse: Mat4, // Camera inverse view matrix
-    pub proj_inverse: Mat4, // Camera inverse projection matrix
+    pub view_inverse: bevy_math::Mat4, // Camera inverse view matrix
+    pub proj_inverse: Mat4,            // Camera inverse projection matrix
 }
 
 pub struct CameraTransform {
-    pub translation: Vec3,
-    pub global_rotation: Vec3,
-    pub local_rotation: Vec3,
+    pub transform: Transform,
 }
 
 macro_rules! destroy_buffer {
@@ -131,6 +132,7 @@ pub struct AppBase<'a> {
     pub last_frame_update: std::time::Instant,
     pub delta_time: std::time::Duration,
 
+    pub player_controller: PlayerController,
     pub camera: CameraTransform,
     pub sensitivity: f32,
 }
@@ -1026,7 +1028,7 @@ impl AppBase<'_> {
     }
 
     pub fn create_colors_buffer(&mut self) {
-        let colors = [Vec3::x(), Vec3::y(), Vec3::z()];
+        let colors = [glm::Vec3::x(), glm::Vec3::y(), glm::Vec3::z()];
         let data = bytes_of(&colors);
 
         let mut colors_buffer = BufferResource::new(
@@ -1455,12 +1457,26 @@ impl AppBase<'_> {
 
     pub fn update_look_position(&mut self, delta: (f64, f64)) {
         if self.focused {
-            let x = delta.0 as f32 * self.sensitivity;
-            let y = delta.1 as f32 * self.sensitivity;
+            let (mut yaw, mut pitch, _) = self
+                .camera
+                .transform
+                .rotation
+                .to_euler(bevy_math::EulerRot::YXZ);
 
-            self.camera.global_rotation.y -= x;
-            self.camera.local_rotation.z =
-                (self.camera.local_rotation.z + y).clamp(-glm::half_pi::<f32>(), glm::half_pi());
+            let window_scale = self
+                .surface_resolution
+                .height
+                .min(self.surface_resolution.width) as f32;
+
+            yaw -= delta.0 as f32 * self.sensitivity * window_scale * self.delta_time.as_secs_f32();
+            pitch -=
+                delta.1 as f32 * self.sensitivity * window_scale * self.delta_time.as_secs_f32();
+
+            pitch = pitch.clamp(-glm::half_pi::<f32>(), glm::half_pi());
+
+            self.camera.transform.rotation =
+                bevy_math::Quat::from_axis_angle(bevy_math::Vec3::Y, yaw)
+                    * bevy_math::Quat::from_axis_angle(bevy_math::Vec3::X, pitch);
         }
     }
 
@@ -1689,9 +1705,8 @@ impl AppBase<'_> {
         let graphics_queue = unsafe { device.get_device_queue(queue_family_index, 0) };
 
         let camera = CameraTransform {
-            translation: Vec3::new(0.0, 0.0, -2.0),
-            global_rotation: Vec3::new(glm::pi(), 0.0, glm::pi()),
-            local_rotation: Vec3::new(0.0, 0.0, 0.0),
+            transform: Transform::from_xyz(0.0, 0.0, -2.0)
+                .looking_at(bevy_math::Vec3::ZERO, bevy_math::Vec3::Y),
         };
 
         AppBase {
@@ -1730,6 +1745,7 @@ impl AppBase<'_> {
             last_frame_update: std::time::Instant::now(),
             last_second: std::time::Instant::now(),
             delta_time: std::time::Duration::ZERO,
+            player_controller: PlayerController::default(),
             camera,
             sensitivity: 0.001,
             swapchain: None,
