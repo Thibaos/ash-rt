@@ -4,10 +4,8 @@ mod utils;
 
 extern crate nalgebra_glm as glm;
 
-use ash::vk::{self, CommandBufferUsageFlags};
-use base::{AppBase, GlobalUniforms};
-use bytemuck::bytes_of;
-use glm::inverse;
+use ash::vk::{self};
+use base::AppBase;
 use utils::{HEIGHT, WIDTH};
 use winit::{
     application::ApplicationHandler,
@@ -16,109 +14,6 @@ use winit::{
     keyboard,
     window::Window,
 };
-
-fn update_camera(base: &mut AppBase, command_buffer: vk::CommandBuffer) {
-    let local_z = base.camera.transform.local_z();
-    let forward = -bevy_math::Vec3::new(local_z.x, 0.0, local_z.z);
-    let right = bevy_math::Vec3::new(local_z.z, 0.0, -local_z.x);
-
-    let mut velocity = bevy_math::Vec3::ZERO;
-
-    if base.player_controller.forward {
-        velocity += forward;
-    } else if base.player_controller.backward {
-        velocity -= forward;
-    }
-    if base.player_controller.left {
-        velocity -= right;
-    } else if base.player_controller.right {
-        velocity += right;
-    }
-    if base.player_controller.up {
-        velocity += bevy_math::Vec3::Y;
-    } else if base.player_controller.down {
-        velocity -= bevy_math::Vec3::Y;
-    }
-
-    velocity = velocity.normalize_or_zero();
-
-    base.camera.transform.translation +=
-        velocity * base.delta_time.as_secs_f32() * base.player_controller.speed;
-
-    let view_inverse = base.camera.transform.compute_matrix();
-
-    let proj_matrix = glm::perspective(base.aspect_ratio(), glm::pi::<f32>() / 2.5, 0.1, 1000.0);
-
-    let proj_inverse = inverse(&proj_matrix);
-
-    let uniform_buffer_data = GlobalUniforms {
-        view_inverse,
-        proj_inverse,
-    };
-
-    let uniforms_buffer = base.uniforms_buffer.as_mut().unwrap();
-
-    unsafe {
-        let buffer_barrier = vk::BufferMemoryBarrier::default()
-            .src_access_mask(vk::AccessFlags::SHADER_READ)
-            .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-            .buffer(uniforms_buffer.buffer)
-            .size(uniforms_buffer.size);
-
-        base.device.cmd_pipeline_barrier(
-            command_buffer,
-            vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::DependencyFlags::DEVICE_GROUP,
-            &[],
-            &[buffer_barrier],
-            &[],
-        );
-    }
-
-    unsafe {
-        base.device.cmd_update_buffer(
-            command_buffer,
-            uniforms_buffer.buffer,
-            0,
-            bytes_of(&uniform_buffer_data),
-        )
-    }
-
-    unsafe {
-        let buffer_barrier = vk::BufferMemoryBarrier::default()
-            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-            .dst_access_mask(vk::AccessFlags::SHADER_READ)
-            .buffer(uniforms_buffer.buffer)
-            .size(uniforms_buffer.size);
-
-        base.device.cmd_pipeline_barrier(
-            command_buffer,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-            vk::DependencyFlags::DEVICE_GROUP,
-            &[],
-            &[buffer_barrier],
-            &[],
-        );
-    }
-}
-
-fn toggle_capture_mouse(base: &mut AppBase) {
-    if base.focused {
-        base.focused = false;
-        base.window
-            .set_cursor_grab(winit::window::CursorGrabMode::None)
-            .unwrap();
-        base.window.set_cursor_visible(true);
-    } else {
-        base.focused = true;
-        base.window
-            .set_cursor_grab(winit::window::CursorGrabMode::Confined)
-            .unwrap();
-        base.window.set_cursor_visible(false);
-    }
-}
 
 #[derive(Default)]
 struct App<'a> {
@@ -199,7 +94,7 @@ impl App<'static> {
                 .begin_command_buffer(rt_command_buffer, &rt_command_buffer_begin_info)
                 .expect("Begin commandbuffer");
 
-            update_camera(base, rt_command_buffer);
+            base.update_camera(rt_command_buffer);
 
             // full rt pass
             {
@@ -453,7 +348,7 @@ impl ApplicationHandler for App<'static> {
 
             unsafe {
                 let begin_info = vk::CommandBufferBeginInfo::default()
-                    .flags(CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
                 app.device
                     .begin_command_buffer(rt_command_buffer, &begin_info)
@@ -490,7 +385,7 @@ impl ApplicationHandler for App<'static> {
                 state: ElementState::Pressed,
                 button: MouseButton::Right,
                 ..
-            } => toggle_capture_mouse(self.base.as_mut().unwrap()),
+            } => self.base.as_mut().unwrap().toggle_capture_mouse(),
             WindowEvent::MouseWheel {
                 delta: MouseScrollDelta::LineDelta(_, y),
                 ..

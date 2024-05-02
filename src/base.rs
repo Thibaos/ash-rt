@@ -1544,6 +1544,110 @@ impl AppBase<'_> {
         }
     }
 
+    pub fn toggle_capture_mouse(&mut self) {
+        if self.focused {
+            self.focused = false;
+            self.window
+                .set_cursor_grab(winit::window::CursorGrabMode::None)
+                .unwrap();
+            self.window.set_cursor_visible(true);
+        } else {
+            self.focused = true;
+            self.window
+                .set_cursor_grab(winit::window::CursorGrabMode::Confined)
+                .unwrap();
+            self.window.set_cursor_visible(false);
+        }
+    }
+
+    pub fn update_camera(&mut self, command_buffer: vk::CommandBuffer) {
+        let local_z = self.camera.transform.local_z();
+        let forward = -bevy_math::Vec3::new(local_z.x, 0.0, local_z.z);
+        let right = bevy_math::Vec3::new(local_z.z, 0.0, -local_z.x);
+
+        let mut velocity = bevy_math::Vec3::ZERO;
+
+        if self.player_controller.forward {
+            velocity += forward;
+        } else if self.player_controller.backward {
+            velocity -= forward;
+        }
+        if self.player_controller.left {
+            velocity -= right;
+        } else if self.player_controller.right {
+            velocity += right;
+        }
+        if self.player_controller.up {
+            velocity += bevy_math::Vec3::Y;
+        } else if self.player_controller.down {
+            velocity -= bevy_math::Vec3::Y;
+        }
+
+        velocity = velocity.normalize_or_zero();
+
+        self.camera.transform.translation +=
+            velocity * self.delta_time.as_secs_f32() * self.player_controller.speed;
+
+        let view_inverse = self.camera.transform.compute_matrix();
+
+        let proj_matrix =
+            glm::perspective(self.aspect_ratio(), glm::pi::<f32>() / 2.5, 0.1, 1000.0);
+
+        let proj_inverse = glm::inverse(&proj_matrix);
+
+        let uniform_buffer_data = GlobalUniforms {
+            view_inverse,
+            proj_inverse,
+        };
+
+        let uniforms_buffer = self.uniforms_buffer.as_mut().unwrap();
+
+        unsafe {
+            let buffer_barrier = vk::BufferMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::SHADER_READ)
+                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .buffer(uniforms_buffer.buffer)
+                .size(uniforms_buffer.size);
+
+            self.device.cmd_pipeline_barrier(
+                command_buffer,
+                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::DEVICE_GROUP,
+                &[],
+                &[buffer_barrier],
+                &[],
+            );
+        }
+
+        unsafe {
+            self.device.cmd_update_buffer(
+                command_buffer,
+                uniforms_buffer.buffer,
+                0,
+                bytes_of(&uniform_buffer_data),
+            )
+        }
+
+        unsafe {
+            let buffer_barrier = vk::BufferMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                .buffer(uniforms_buffer.buffer)
+                .size(uniforms_buffer.size);
+
+            self.device.cmd_pipeline_barrier(
+                command_buffer,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                vk::DependencyFlags::DEVICE_GROUP,
+                &[],
+                &[buffer_barrier],
+                &[],
+            );
+        }
+    }
+
     pub fn new(event_loop: &ActiveEventLoop, window_width: u32, window_height: u32) -> Self {
         let window_attributes = Window::default_attributes()
             .with_title("RT")
