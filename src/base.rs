@@ -79,6 +79,7 @@ pub struct AppBase<'a> {
     pub draw_command_buffer: vk::CommandBuffer,
     pub setup_command_buffer: vk::CommandBuffer,
     pub update_command_buffer: vk::CommandBuffer,
+    pub rt_command_buffer: vk::CommandBuffer,
     pub render_pass: Option<vk::RenderPass>,
 
     pub depth_image: Option<vk::Image>,
@@ -132,6 +133,7 @@ pub struct AppBase<'a> {
     pub sbt_call_region: Option<vk::StridedDeviceAddressRegionKHR>,
 
     pub start: std::time::Instant,
+    pub frame_start: std::time::Instant,
     pub current_frames_counter: u64,
     pub last_second: std::time::Instant,
     pub last_frame_update: std::time::Instant,
@@ -1560,7 +1562,7 @@ impl AppBase<'_> {
         }
     }
 
-    pub fn update_camera(&mut self, command_buffer: vk::CommandBuffer) {
+    pub fn update_camera(&mut self) {
         let local_z = self.camera.transform.local_z();
         let forward = -bevy_math::Vec3::new(local_z.x, 0.0, local_z.z);
         let right = bevy_math::Vec3::new(local_z.z, 0.0, -local_z.x);
@@ -1610,7 +1612,7 @@ impl AppBase<'_> {
                 .size(uniforms_buffer.size);
 
             self.device.cmd_pipeline_barrier(
-                command_buffer,
+                self.rt_command_buffer,
                 vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
                 vk::PipelineStageFlags::TRANSFER,
                 vk::DependencyFlags::DEVICE_GROUP,
@@ -1622,7 +1624,7 @@ impl AppBase<'_> {
 
         unsafe {
             self.device.cmd_update_buffer(
-                command_buffer,
+                self.rt_command_buffer,
                 uniforms_buffer.buffer,
                 0,
                 bytes_of(&uniform_buffer_data),
@@ -1637,7 +1639,7 @@ impl AppBase<'_> {
                 .size(uniforms_buffer.size);
 
             self.device.cmd_pipeline_barrier(
-                command_buffer,
+                self.rt_command_buffer,
                 vk::PipelineStageFlags::TRANSFER,
                 vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
                 vk::DependencyFlags::DEVICE_GROUP,
@@ -1877,6 +1879,16 @@ impl AppBase<'_> {
                 .looking_at(bevy_math::Vec3::ZERO, bevy_math::Vec3::Y),
         };
 
+        let rt_command_buffer = {
+            let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
+                .command_buffer_count(1)
+                .command_pool(pool)
+                .level(vk::CommandBufferLevel::PRIMARY);
+
+            unsafe { device.allocate_command_buffers(&command_buffer_allocate_info) }
+                .expect("Failed to allocate Command Buffers!")[0]
+        };
+
         AppBase {
             entry,
             ray_tracing_pipeline_loader,
@@ -1897,6 +1909,7 @@ impl AppBase<'_> {
             draw_command_buffer,
             setup_command_buffer,
             update_command_buffer,
+            rt_command_buffer,
             present_complete_semaphore,
             rendering_complete_semaphore,
             draw_commands_reuse_fence,
@@ -1910,6 +1923,7 @@ impl AppBase<'_> {
             present_mode,
             current_frames_counter: 0,
             start: std::time::Instant::now(),
+            frame_start: std::time::Instant::now(),
             last_frame_update: std::time::Instant::now(),
             last_second: std::time::Instant::now(),
             delta_time: std::time::Duration::ZERO,
@@ -1965,6 +1979,291 @@ impl AppBase<'_> {
         self.create_data_structures();
         self.create_descriptor_sets().unwrap();
         self.create_rt_sbt().unwrap();
+    }
+
+    pub fn main_loop(&mut self) {
+        let rt_command_buffer = self.rt_command_buffer;
+        unsafe {
+            self.device
+                .wait_for_fences(&[self.swapchain_acquire_fence], true, std::u64::MAX)
+                .expect("Wait for fence failed.");
+
+            self.device
+                .reset_fences(&[self.swapchain_acquire_fence])
+                .expect("Reset fences failed.");
+        }
+
+        if self.resized {
+            self.recreate_swapchain().unwrap();
+            self.resized = false;
+        }
+
+        self.current_frames_counter += 1;
+
+        self.frame_start = std::time::Instant::now();
+
+        self.update_delta_time();
+
+        if self.frame_start.duration_since(self.last_second).as_secs() > 0 {
+            // println!("{}fps", self.current_frames_counter);
+            self.reset_fps_counter();
+        }
+
+        let (present_index, _) = unsafe {
+            self.swapchain_loader.acquire_next_image(
+                self.swapchain.unwrap(),
+                std::u64::MAX,
+                self.present_complete_semaphore,
+                self.swapchain_acquire_fence,
+            )
+        }
+        .unwrap();
+
+        let current_swapchain_image = self.present_images.as_ref().unwrap()[present_index as usize];
+
+        unsafe {
+            self.device
+                .wait_for_fences(&[self.draw_commands_reuse_fence], true, std::u64::MAX)
+                .expect("Wait for fence failed.");
+
+            self.device
+                .reset_fences(&[self.draw_commands_reuse_fence])
+                .expect("Reset fences failed.");
+
+            self.device
+                .reset_command_buffer(
+                    rt_command_buffer,
+                    vk::CommandBufferResetFlags::RELEASE_RESOURCES,
+                )
+                .expect("Reset command buffer failed.");
+
+            let rt_command_buffer_begin_info = vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+            self.device
+                .begin_command_buffer(rt_command_buffer, &rt_command_buffer_begin_info)
+                .expect("Begin commandbuffer");
+
+            self.update_camera();
+
+            // full rt pass
+            {
+                self.device.cmd_bind_pipeline(
+                    rt_command_buffer,
+                    vk::PipelineBindPoint::RAY_TRACING_KHR,
+                    self.pipeline.unwrap(),
+                );
+                self.device.cmd_bind_descriptor_sets(
+                    rt_command_buffer,
+                    vk::PipelineBindPoint::RAY_TRACING_KHR,
+                    self.pipeline_layout.unwrap(),
+                    0,
+                    &[
+                        self.rt_descriptor_set.unwrap(),
+                        self.uniforms_descriptor_set.unwrap(),
+                    ],
+                    &[],
+                );
+                self.ray_tracing_pipeline_loader.cmd_trace_rays(
+                    rt_command_buffer,
+                    &self.sbt_raygen_region.unwrap(),
+                    &self.sbt_miss_region.unwrap(),
+                    &self.sbt_hit_region.unwrap(),
+                    &self.sbt_call_region.unwrap(),
+                    self.surface_resolution.width,
+                    self.surface_resolution.height,
+                    1,
+                );
+            }
+
+            // current swapchain to dst layout
+            {
+                let image_barrier = vk::ImageMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::empty())
+                    .dst_access_mask(
+                        vk::AccessFlags::TRANSFER_WRITE | vk::AccessFlags::TRANSFER_READ,
+                    )
+                    .old_layout(vk::ImageLayout::UNDEFINED)
+                    .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                    .image(current_swapchain_image)
+                    .subresource_range(
+                        vk::ImageSubresourceRange::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .base_mip_level(0)
+                            .level_count(1)
+                            .base_array_layer(0)
+                            .layer_count(1),
+                    );
+
+                self.device.cmd_pipeline_barrier(
+                    rt_command_buffer,
+                    vk::PipelineStageFlags::TOP_OF_PIPE,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[image_barrier],
+                );
+            }
+
+            // rt image to src layout
+            {
+                let image_barrier = vk::ImageMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                    .dst_access_mask(
+                        vk::AccessFlags::TRANSFER_WRITE | vk::AccessFlags::TRANSFER_READ,
+                    )
+                    .old_layout(vk::ImageLayout::GENERAL)
+                    .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                    .image(self.rt_image.unwrap())
+                    .subresource_range(
+                        vk::ImageSubresourceRange::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .base_mip_level(0)
+                            .level_count(1)
+                            .base_array_layer(0)
+                            .layer_count(1),
+                    );
+
+                self.device.cmd_pipeline_barrier(
+                    rt_command_buffer,
+                    vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[image_barrier],
+                );
+            }
+
+            // copy rt image to swapchain
+            {
+                let copy_region = vk::ImageCopy::default()
+                    .src_subresource(
+                        vk::ImageSubresourceLayers::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .layer_count(1),
+                    )
+                    .dst_subresource(
+                        vk::ImageSubresourceLayers::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .layer_count(1),
+                    )
+                    .extent(
+                        vk::Extent3D::default()
+                            .width(self.surface_resolution.width)
+                            .height(self.surface_resolution.height)
+                            .depth(1),
+                    );
+
+                self.device.cmd_copy_image(
+                    rt_command_buffer,
+                    self.rt_image.unwrap(),
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    current_swapchain_image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &[copy_region],
+                );
+            }
+
+            // current swapchain to present src layout
+            {
+                let image_barrier = vk::ImageMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                    .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_READ)
+                    .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                    .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+                    .image(current_swapchain_image)
+                    .subresource_range(
+                        vk::ImageSubresourceRange::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .base_mip_level(0)
+                            .level_count(1)
+                            .base_array_layer(0)
+                            .layer_count(1),
+                    );
+
+                self.device.cmd_pipeline_barrier(
+                    rt_command_buffer,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::ALL_COMMANDS,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[image_barrier],
+                );
+            }
+
+            // rt image back to general layout
+            {
+                let image_barrier = vk::ImageMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::TRANSFER_READ)
+                    .dst_access_mask(vk::AccessFlags::MEMORY_WRITE)
+                    .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                    .new_layout(vk::ImageLayout::GENERAL)
+                    .image(self.rt_image.unwrap())
+                    .subresource_range(
+                        vk::ImageSubresourceRange::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .base_mip_level(0)
+                            .level_count(1)
+                            .base_array_layer(0)
+                            .layer_count(1),
+                    );
+
+                self.device.cmd_pipeline_barrier(
+                    rt_command_buffer,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::ALL_COMMANDS,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[image_barrier],
+                );
+            }
+
+            self.device
+                .end_command_buffer(rt_command_buffer)
+                .expect("End commandbuffer");
+
+            let command_buffers = vec![rt_command_buffer];
+            let wait_semaphores = &[self.present_complete_semaphore];
+            let signal_semaphores = &[self.rendering_complete_semaphore];
+
+            let submit_info = vk::SubmitInfo::default()
+                .wait_semaphores(wait_semaphores)
+                .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
+                .command_buffers(&command_buffers)
+                .signal_semaphores(signal_semaphores);
+
+            self.device
+                .queue_submit(
+                    self.present_queue,
+                    &[submit_info],
+                    self.draw_commands_reuse_fence,
+                )
+                .expect("queue submit failed.");
+        }
+
+        let wait_semaphors = [self.rendering_complete_semaphore];
+        let swapchains = [self.swapchain.unwrap()];
+        let image_indices = [present_index];
+        let present_info = vk::PresentInfoKHR::default()
+            .wait_semaphores(&wait_semaphors)
+            .swapchains(&swapchains)
+            .image_indices(&image_indices);
+
+        unsafe {
+            if let Err(code) = self
+                .swapchain_loader
+                .queue_present(self.present_queue, &present_info)
+            {
+                match code {
+                    vk::Result::ERROR_OUT_OF_DATE_KHR => self.recreate_swapchain().unwrap(),
+                    _ => (),
+                }
+            }
+        }
     }
 }
 
