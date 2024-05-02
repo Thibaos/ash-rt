@@ -1,6 +1,3 @@
-extern crate ash;
-extern crate winit;
-
 use ash::{ext, khr, vk, Device, Entry, Instance};
 use bevy_transform::components::Transform;
 use bytemuck::{bytes_of, Pod, Zeroable};
@@ -24,6 +21,13 @@ use crate::{
 pub struct GlobalUniforms {
     pub view_inverse: bevy_math::Mat4, // Camera inverse view matrix
     pub proj_inverse: Mat4,            // Camera inverse projection matrix
+}
+
+#[repr(C)]
+#[derive(Clone, Debug, Copy, Pod, Zeroable)]
+pub struct Voxel {
+    pub position: glm::Vec3,
+    _pad: f32,
 }
 
 pub struct CameraTransform {
@@ -109,6 +113,7 @@ pub struct AppBase<'a> {
 
     pub colors_buffer: Option<BufferResource>,
     pub uniforms_buffer: Option<BufferResource>,
+    pub voxels_buffer: Option<BufferResource>,
 
     pub rt_descriptor_pool: Option<vk::DescriptorPool>,
     pub rt_descriptor_set: Option<vk::DescriptorSet>,
@@ -1066,6 +1071,37 @@ impl AppBase<'_> {
         self.create_as_instances();
         self.create_top_as();
         self.create_colors_buffer();
+
+        let position0 = glm::Vec3::new(-1.5, 1.0, 10.0);
+        let position1 = glm::Vec3::new(0.0, -1.0, 0.0);
+        let position2 = glm::Vec3::new(1.5, 1.0, 0.0);
+
+        let voxels = &[
+            Voxel {
+                position: position0,
+                _pad: 0.0,
+            },
+            Voxel {
+                position: position1,
+                _pad: 0.0,
+            },
+            Voxel {
+                position: position2,
+                _pad: 0.0,
+            },
+        ];
+
+        let mut voxels_buffer = BufferResource::new(
+            std::mem::size_of_val(voxels) as u64,
+            vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            &self.device,
+            self.device_memory_properties,
+        );
+        voxels_buffer.store(voxels, &self.device);
+
+        self.voxels_buffer = Some(voxels_buffer);
+
         self.create_uniforms_buffer();
     }
 
@@ -1080,6 +1116,10 @@ impl AppBase<'_> {
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::STORAGE_IMAGE,
+                descriptor_count: 1,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::UNIFORM_BUFFER,
                 descriptor_count: 1,
             },
             vk::DescriptorPoolSize {
@@ -1101,7 +1141,8 @@ impl AppBase<'_> {
         let rt_binding_flags_inner = [
             vk::DescriptorBindingFlagsEXT::empty(),
             vk::DescriptorBindingFlagsEXT::empty(),
-            vk::DescriptorBindingFlags::empty(),
+            vk::DescriptorBindingFlagsEXT::empty(),
+            vk::DescriptorBindingFlagsEXT::empty(),
         ];
 
         let mut rt_binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfoEXT::default()
@@ -1126,6 +1167,11 @@ impl AppBase<'_> {
                             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                             .stage_flags(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
                             .binding(2),
+                        vk::DescriptorSetLayoutBinding::default()
+                            .descriptor_count(1)
+                            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                            .stage_flags(vk::ShaderStageFlags::INTERSECTION_KHR)
+                            .binding(3),
                     ])
                     .push_next(&mut rt_binding_flags),
                 None,
@@ -1311,9 +1357,27 @@ impl AppBase<'_> {
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .buffer_info(&colors_buffer_info);
 
+        let voxels_buffer_info = [vk::DescriptorBufferInfo::default()
+            .buffer(self.voxels_buffer.as_ref().unwrap().buffer)
+            .range(vk::WHOLE_SIZE)];
+
+        let voxels_buffer_write = vk::WriteDescriptorSet::default()
+            .dst_set(rt_descriptor_set)
+            .dst_binding(3)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .buffer_info(&voxels_buffer_info);
+
         unsafe {
-            self.device
-                .update_descriptor_sets(&[accel_write, image_write, colors_buffer_write], &[]);
+            self.device.update_descriptor_sets(
+                &[
+                    accel_write,
+                    image_write,
+                    colors_buffer_write,
+                    voxels_buffer_write,
+                ],
+                &[],
+            );
         }
 
         let uniforms_buffer_info = [vk::DescriptorBufferInfo::default()
@@ -1771,6 +1835,7 @@ impl AppBase<'_> {
             instance_buffer: None,
             colors_buffer: None,
             uniforms_buffer: None,
+            voxels_buffer: None,
             rt_descriptor_pool: None,
             rt_descriptor_set: None,
             rt_descriptor_set_layout: None,
@@ -1846,6 +1911,7 @@ impl Drop for AppBase<'_> {
             destroy_buffer!(self.aabb_buffer, self.device);
             destroy_buffer!(self.shader_binding_table_buffer, self.device);
             destroy_buffer!(self.uniforms_buffer, self.device);
+            destroy_buffer!(self.voxels_buffer, self.device);
 
             self.device.destroy_command_pool(self.pool, None);
             self.device.destroy_device(None);

@@ -10,8 +10,6 @@ ash = { version = "0.38", default-features = false, features = [
 ] }
 ash-window = "0.13"
 winit = { version = "0.30.0" }
-png = "0.17"
-image = "0.25"
 raw-window-handle = "0.6"
 anyhow = "1.0.82"
 bytemuck = { version = "1.15.0", features = ["derive"] }

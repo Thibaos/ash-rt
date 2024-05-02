@@ -49,7 +49,6 @@ fn update_camera(base: &mut AppBase, command_buffer: vk::CommandBuffer) {
 
     let proj_matrix = glm::perspective(base.aspect_ratio(), glm::pi::<f32>() / 2.5, 0.1, 1000.0);
 
-    // let view_proj = view_matrix * proj_matrix;
     let proj_inverse = inverse(&proj_matrix);
 
     let uniform_buffer_data = GlobalUniforms {
