@@ -1,6 +1,8 @@
 mod base;
 mod player_controller;
+mod uniform_types;
 mod utils;
+mod vk_controller;
 
 extern crate nalgebra_glm as glm;
 
@@ -21,26 +23,32 @@ struct App<'a> {
 
 impl ApplicationHandler for App<'static> {
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        self.base.as_mut().unwrap().window.request_redraw();
+        self.base
+            .as_mut()
+            .unwrap()
+            .vk_controller
+            .window
+            .request_redraw();
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.base.is_none() {
-            let mut app = AppBase::new(&event_loop, WIDTH, HEIGHT);
-            app.init();
+            let app = AppBase::new(&event_loop, WIDTH, HEIGHT);
 
             unsafe {
                 let begin_info = vk::CommandBufferBeginInfo::default()
                     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
-                app.device
-                    .begin_command_buffer(app.rt_command_buffer, &begin_info)
+                app.vk_controller
+                    .device
+                    .begin_command_buffer(app.vk_controller.rt_command_buffer, &begin_info)
                     .unwrap();
             }
 
             unsafe {
-                app.device
-                    .end_command_buffer(app.rt_command_buffer)
+                app.vk_controller
+                    .device
+                    .end_command_buffer(app.vk_controller.rt_command_buffer)
                     .unwrap();
             }
 
