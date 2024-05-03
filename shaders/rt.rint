@@ -48,20 +48,5 @@ float hitAabb(const Aabb aabb, const vec3 origin, const vec3 direction) {
 }
 
 void main() {
-    vec3 origin    = gl_WorldRayOriginEXT;
-    vec3 direction = gl_WorldRayDirectionEXT;
-
-    Voxel voxel = allVoxels[gl_InstanceCustomIndexEXT];
-
-    Aabb aabb;
-    aabb.minimum = voxel.position;
-    aabb.maximum = voxel.position + vec3(1.0);
-    float tHit = hitAabb(aabb, origin, direction);
-
-    if (tHit > 0.0) {
-        uint hit_kind = hit_kind(aabb, origin + direction * tHit);
-        reportIntersectionEXT(tHit, hit_kind);
-    } else {
-        reportIntersectionEXT(1.0, KIND_UNKNOWN);
-    }
+    reportIntersectionEXT(1.0, 0);
 }

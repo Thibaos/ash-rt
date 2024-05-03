@@ -16,3 +16,7 @@ bytemuck = { version = "1.15.0", features = ["derive"] }
 nalgebra-glm = { version = "0.18.0", features = ["convert-bytemuck"] }
 bevy_transform = "0.13.2"
 bevy_math = "0.13.2"
+rand = "0.8.5"
+
+[profile.release]
+opt-level = 3

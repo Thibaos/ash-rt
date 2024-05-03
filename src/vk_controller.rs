@@ -12,6 +12,7 @@ use crate::{
         get_memory_type_index, pick_physical_device_and_queue_family_indices,
         record_submit_commandbuffer, vulkan_debug_callback, BufferResource,
     },
+    voxels::create_cube_instances,
 };
 
 macro_rules! destroy_buffer {
@@ -1301,7 +1302,7 @@ impl VkController<'_> {
             .primitive_offset(0)
             .transform_offset(0);
 
-        let geometries = [self.as_geometry.unwrap()];
+        let geometries: [vk::AccelerationStructureGeometryKHR; 1] = [self.as_geometry.unwrap()];
 
         let mut build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
             .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
@@ -1416,51 +1417,7 @@ impl VkController<'_> {
             }
         };
 
-        let transform_0: [f32; 12] = [1.0, 0.0, 0.0, -1.5, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 10.0];
-        let transform_1: [f32; 12] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0];
-        let transform_2: [f32; 12] = [1.0, 0.0, 0.0, 1.5, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0];
-
-        let instances = vec![
-            vk::AccelerationStructureInstanceKHR {
-                transform: vk::TransformMatrixKHR {
-                    matrix: transform_0,
-                },
-                instance_custom_index_and_mask: vk::Packed24_8::new(0, 0xff),
-                instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(
-                    0,
-                    vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw() as u8,
-                ),
-                acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
-                    device_handle: accel_handle,
-                },
-            },
-            vk::AccelerationStructureInstanceKHR {
-                transform: vk::TransformMatrixKHR {
-                    matrix: transform_1,
-                },
-                instance_custom_index_and_mask: vk::Packed24_8::new(1, 0xff),
-                instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(
-                    0,
-                    vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw() as u8,
-                ),
-                acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
-                    device_handle: accel_handle,
-                },
-            },
-            vk::AccelerationStructureInstanceKHR {
-                transform: vk::TransformMatrixKHR {
-                    matrix: transform_2,
-                },
-                instance_custom_index_and_mask: vk::Packed24_8::new(2, 0xff),
-                instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(
-                    0,
-                    vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw() as u8,
-                ),
-                acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
-                    device_handle: accel_handle,
-                },
-            },
-        ];
+        let instances = create_cube_instances(accel_handle, 1024, 0.01);
 
         let instance_buffer_size =
             std::mem::size_of::<vk::AccelerationStructureInstanceKHR>() * instances.len();

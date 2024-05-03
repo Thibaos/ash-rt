@@ -3,6 +3,7 @@ mod player_controller;
 mod uniform_types;
 mod utils;
 mod vk_controller;
+mod voxels;
 
 extern crate nalgebra_glm as glm;
 
