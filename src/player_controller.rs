@@ -30,9 +30,9 @@ impl Default for PlayerController {
 impl PlayerController {
     pub fn handle_speed_change(&mut self, y_delta: f32) {
         if y_delta.is_sign_positive() {
-            self.speed *= 1.1;
+            self.speed *= 1.5;
         } else {
-            self.speed /= 1.1;
+            self.speed /= 1.5;
         }
     }
 

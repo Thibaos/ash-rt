@@ -1,11 +1,13 @@
 use std::{
-    borrow::Cow,
     collections::HashSet,
     ffi::{c_char, CStr},
     ptr,
 };
 
 use ash::{khr, prelude::VkResult, util, vk, Device, Instance};
+
+#[cfg(debug_assertions)]
+use std::borrow::Cow;
 
 pub const WIDTH: u32 = 1920;
 pub const HEIGHT: u32 = 1080;
@@ -79,6 +81,7 @@ pub fn record_submit_commandbuffer<F: FnOnce(&Device, vk::CommandBuffer)>(
     }
 }
 
+#[cfg(debug_assertions)]
 pub unsafe extern "system" fn vulkan_debug_callback(
     message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
     message_type: vk::DebugUtilsMessageTypeFlagsEXT,

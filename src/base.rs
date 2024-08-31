@@ -18,7 +18,6 @@ pub struct AppBase<'a> {
     pub resized: bool,
     pub focused: bool,
 
-    pub start: std::time::Instant,
     pub frame_start: std::time::Instant,
     pub current_frames_counter: u64,
     pub last_second: std::time::Instant,
@@ -66,10 +65,8 @@ impl AppBase<'_> {
                     * scale
                     / WIDTH as f64;
 
-            yaw -=
-                (delta.0 * self.sensitivity * self.delta_time.as_secs_f64() / surface_size) as f32;
-            pitch -=
-                (delta.1 * self.sensitivity * self.delta_time.as_secs_f64() / surface_size) as f32;
+            yaw -= (delta.0 * self.sensitivity / surface_size) as f32;
+            pitch -= (delta.1 * self.sensitivity / surface_size) as f32;
 
             pitch = pitch.clamp(-glm::half_pi::<f32>(), glm::half_pi());
 
@@ -197,14 +194,13 @@ impl AppBase<'_> {
         AppBase {
             vk_controller,
             current_frames_counter: 0,
-            start: std::time::Instant::now(),
             frame_start: std::time::Instant::now(),
             last_frame_update: std::time::Instant::now(),
             last_second: std::time::Instant::now(),
             delta_time: std::time::Duration::ZERO,
             player_controller: PlayerController::default(),
             camera,
-            sensitivity: 1.0,
+            sensitivity: 0.001,
             resized: false,
             focused: false,
         }
@@ -246,7 +242,7 @@ impl AppBase<'_> {
 
         let (present_index, _) = unsafe {
             self.vk_controller.swapchain_loader.acquire_next_image(
-                self.vk_controller.swapchain.unwrap(),
+                self.vk_controller.swapchain,
                 std::u64::MAX,
                 self.vk_controller.present_complete_semaphore,
                 self.vk_controller.swapchain_acquire_fence,
@@ -254,8 +250,7 @@ impl AppBase<'_> {
         }
         .unwrap();
 
-        let current_swapchain_image =
-            self.vk_controller.present_images.as_ref().unwrap()[present_index as usize];
+        let current_swapchain_image = self.vk_controller.present_images[present_index as usize];
 
         unsafe {
             self.vk_controller
@@ -361,7 +356,7 @@ impl AppBase<'_> {
                     )
                     .old_layout(vk::ImageLayout::GENERAL)
                     .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-                    .image(self.vk_controller.rt_image.unwrap())
+                    .image(self.vk_controller.rt_image)
                     .subresource_range(
                         vk::ImageSubresourceRange::default()
                             .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -404,7 +399,7 @@ impl AppBase<'_> {
 
                 self.vk_controller.device.cmd_copy_image(
                     rt_command_buffer,
-                    self.vk_controller.rt_image.unwrap(),
+                    self.vk_controller.rt_image,
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                     current_swapchain_image,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -447,7 +442,7 @@ impl AppBase<'_> {
                     .dst_access_mask(vk::AccessFlags::MEMORY_WRITE)
                     .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
                     .new_layout(vk::ImageLayout::GENERAL)
-                    .image(self.vk_controller.rt_image.unwrap())
+                    .image(self.vk_controller.rt_image)
                     .subresource_range(
                         vk::ImageSubresourceRange::default()
                             .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -494,7 +489,7 @@ impl AppBase<'_> {
         }
 
         let wait_semaphors = [self.vk_controller.rendering_complete_semaphore];
-        let swapchains = [self.vk_controller.swapchain.unwrap()];
+        let swapchains = [self.vk_controller.swapchain];
         let image_indices = [present_index];
         let present_info = vk::PresentInfoKHR::default()
             .wait_semaphores(&wait_semaphors)

@@ -1,9 +1,11 @@
 mod base;
+mod io;
 mod player_controller;
+mod random_generation;
+mod render;
 mod uniform_types;
 mod utils;
 mod vk_controller;
-mod voxels;
 
 extern crate nalgebra_glm as glm;
 

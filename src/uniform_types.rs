@@ -10,7 +10,7 @@ pub struct GlobalUniforms {
 
 #[repr(C)]
 #[derive(Clone, Debug, Copy, Pod, Zeroable)]
-pub struct Voxel {
+pub struct VoxelPosition {
     pub position: glm::Vec3,
     pub _pad: f32,
 }
