@@ -350,11 +350,9 @@ impl AppBase<'_> {
             // rt image to src layout
             {
                 let image_barrier = vk::ImageMemoryBarrier::default()
-                    .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                    .dst_access_mask(
-                        vk::AccessFlags::TRANSFER_WRITE | vk::AccessFlags::TRANSFER_READ,
-                    )
-                    .old_layout(vk::ImageLayout::GENERAL)
+                    .src_access_mask(vk::AccessFlags::empty())
+                    .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                    .old_layout(vk::ImageLayout::UNDEFINED)
                     .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
                     .image(self.vk_controller.rt_image)
                     .subresource_range(
@@ -368,7 +366,7 @@ impl AppBase<'_> {
 
                 self.vk_controller.device.cmd_pipeline_barrier(
                     rt_command_buffer,
-                    vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                    vk::PipelineStageFlags::TRANSFER,
                     vk::PipelineStageFlags::TRANSFER,
                     vk::DependencyFlags::empty(),
                     &[],
@@ -427,7 +425,7 @@ impl AppBase<'_> {
                 self.vk_controller.device.cmd_pipeline_barrier(
                     rt_command_buffer,
                     vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::ALL_COMMANDS,
+                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
                     vk::DependencyFlags::empty(),
                     &[],
                     &[],
@@ -455,7 +453,7 @@ impl AppBase<'_> {
                 self.vk_controller.device.cmd_pipeline_barrier(
                     rt_command_buffer,
                     vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::ALL_COMMANDS,
+                    vk::PipelineStageFlags::TRANSFER,
                     vk::DependencyFlags::empty(),
                     &[],
                     &[],

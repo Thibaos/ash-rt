@@ -10,9 +10,9 @@ pub struct GlobalUniforms {
 
 #[repr(C)]
 #[derive(Clone, Debug, Copy, Pod, Zeroable)]
-pub struct VoxelPosition {
+pub struct VoxelInfos {
     pub position: glm::Vec3,
-    pub _pad: f32,
+    pub palette_index: u32,
 }
 
 pub struct CameraTransform {

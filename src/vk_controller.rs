@@ -1,13 +1,17 @@
 use std::ffi::{c_char, CStr};
 
-use ash::{ext, khr, vk, Device, Entry, Instance};
+use ash::{
+    ext, khr,
+    vk::{self},
+    Device, Entry, Instance,
+};
 use bytemuck::{bytes_of, Zeroable};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::{event_loop::ActiveEventLoop, window::Window};
 
 use crate::{
     io::vox::{get_palette, open_file, vox_to_tlas},
-    uniform_types::{GlobalUniforms, VoxelPosition},
+    uniform_types::{GlobalUniforms, VoxelInfos},
     utils::{
         aligned_size, create_shader_module, find_memorytype_index, get_buffer_device_address,
         get_memory_type_index, pick_physical_device_and_queue_family_indices,
@@ -29,24 +33,24 @@ macro_rules! destroy_buffer {
 }
 
 pub struct VkController<'a> {
-    pub instance: Instance,
+    instance: Instance,
     pub device: Device,
-    pub graphics_queue: vk::Queue,
-    pub surface_loader: khr::surface::Instance,
+    graphics_queue: vk::Queue,
+    surface_loader: khr::surface::Instance,
     pub swapchain_loader: khr::swapchain::Device,
     #[cfg(debug_assertions)]
-    pub debug_utils_loader: ext::debug_utils::Instance,
+    debug_utils_loader: ext::debug_utils::Instance,
     #[cfg(debug_assertions)]
-    pub debug_call_back: vk::DebugUtilsMessengerEXT,
+    debug_call_back: vk::DebugUtilsMessengerEXT,
     pub ray_tracing_pipeline_loader: khr::ray_tracing_pipeline::Device,
-    pub acceleration_structure_loader: khr::acceleration_structure::Device,
+    acceleration_structure_loader: khr::acceleration_structure::Device,
     pub window: winit::window::Window,
-    pub physical_device: vk::PhysicalDevice,
-    pub device_memory_properties: vk::PhysicalDeviceMemoryProperties,
+    physical_device: vk::PhysicalDevice,
+    device_memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub present_queue: vk::Queue,
 
-    pub surface: vk::SurfaceKHR,
-    pub surface_format: vk::SurfaceFormatKHR,
+    surface: vk::SurfaceKHR,
+    surface_format: vk::SurfaceFormatKHR,
     pub surface_resolution: vk::Extent2D,
 
     desired_image_count: u32,
@@ -54,12 +58,12 @@ pub struct VkController<'a> {
     present_mode: vk::PresentModeKHR,
     pub swapchain: vk::SwapchainKHR,
     pub present_images: Vec<vk::Image>,
-    pub present_image_views: Vec<vk::ImageView>,
-    pub framebuffers: Vec<vk::Framebuffer>,
-    pub pool: vk::CommandPool,
-    pub setup_command_buffer: vk::CommandBuffer,
+    present_image_views: Vec<vk::ImageView>,
+    framebuffers: Vec<vk::Framebuffer>,
+    pool: vk::CommandPool,
+    setup_command_buffer: vk::CommandBuffer,
     pub rt_command_buffer: vk::CommandBuffer,
-    pub render_pass: vk::RenderPass,
+    render_pass: vk::RenderPass,
 
     pub depth_image: vk::Image,
     pub depth_image_view: vk::ImageView,
@@ -80,7 +84,9 @@ pub struct VkController<'a> {
     pub swapchain_acquire_fence: vk::Fence,
 
     pub as_geometry: Option<vk::AccelerationStructureGeometryKHR<'a>>,
-    pub aabb_buffer: Option<BufferResource>,
+    // pub aabb_buffer: Option<BufferResource>,
+    pub index_buffer: Option<BufferResource>,
+    pub vertex_buffer: Option<BufferResource>,
 
     pub bottom_as: Option<vk::AccelerationStructureKHR>,
     pub bottom_as_buffer: Option<BufferResource>,
@@ -90,9 +96,9 @@ pub struct VkController<'a> {
 
     pub instance_count: Option<usize>,
     pub instance_buffer: Option<BufferResource>,
-    pub voxels_positions: Option<Vec<VoxelPosition>>,
+    pub voxels_infos: Option<Vec<VoxelInfos>>,
 
-    pub colors_buffer: Option<BufferResource>,
+    pub palette_buffer: Option<BufferResource>,
     pub uniforms_buffer: Option<BufferResource>,
     pub voxels_buffer: Option<BufferResource>,
 
@@ -181,7 +187,8 @@ impl<'a> VkController<'a> {
             .message_type(
                 vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
                     | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
-                    | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+                    | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE
+                    | vk::DebugUtilsMessageTypeFlagsEXT::DEVICE_ADDRESS_BINDING,
             )
             .pfn_user_callback(Some(vulkan_debug_callback));
 
@@ -352,37 +359,6 @@ impl<'a> VkController<'a> {
                 .expect("Failed to allocate Command Buffers!")[0]
         };
 
-        // let framebuffer_controller = FramebufferController {
-        //     swapchain: vk::SwapchainKHR::null(),
-        //     present_images: Vec::new(),
-        //     present_image_views: Vec::new(),
-        //     framebuffers: Vec::new(),
-        //     rt_image: vk::Image::null(),
-        //     rt_image_view: vk::ImageView::null(),
-        //     rt_image_memory: vk::DeviceMemory::null(),
-        //     depth_image: vk::Image::null(),
-        //     depth_image_view: vk::ImageView::null(),
-        //     depth_image_memory: vk::DeviceMemory::null(),
-        //     render_pass: vk::RenderPass::null(),
-        //     infos: CreateSwapchainInfos {
-        //         device: device.clone(),
-        //         physical_device: physical_device.clone(),
-        //         surface: surface.clone(),
-        //         surface_format: surface_format.clone(),
-        //         surface_resolution: surface_resolution.clone(),
-        //         surface_loader: surface_loader.clone(),
-        //         device_memory_properties: device_memory_properties.clone(),
-        //         desired_image_count,
-        //         present_queue: present_queue.clone(),
-        //         present_mode: present_mode.clone(),
-        //         swapchain_loader: swapchain_loader.clone(),
-        //         setup_command_buffer: setup_command_buffer.clone(),
-        //         setup_commands_reuse_fence: setup_commands_reuse_fence.clone(),
-        //         command_pool: pool.clone(),
-        //         graphics_queue: graphics_queue.clone(),
-        //     },
-        // };
-
         let vox_model = open_file("assets/monu1.vox");
 
         VkController {
@@ -430,15 +406,17 @@ impl<'a> VkController<'a> {
             render_pass: vk::RenderPass::null(),
             framebuffers: Vec::new(),
             as_geometry: None,
-            aabb_buffer: None,
+            // aabb_buffer: None,
+            index_buffer: None,
+            vertex_buffer: None,
             bottom_as: None,
             bottom_as_buffer: None,
             top_as: None,
             top_as_buffer: None,
             instance_count: None,
             instance_buffer: None,
-            voxels_positions: None,
-            colors_buffer: None,
+            voxels_infos: None,
+            palette_buffer: None,
             uniforms_buffer: None,
             voxels_buffer: None,
             uniforms_descriptor_pool: None,
@@ -485,7 +463,7 @@ impl<'a> VkController<'a> {
                 descriptor_count: 1,
             },
             vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::UNIFORM_BUFFER, // colors buffer
+                ty: vk::DescriptorType::UNIFORM_BUFFER, // palette buffer
                 descriptor_count: 1,
             },
         ];
@@ -501,6 +479,8 @@ impl<'a> VkController<'a> {
         .unwrap();
 
         let rt_binding_flags_inner = [
+            vk::DescriptorBindingFlagsEXT::empty(),
+            vk::DescriptorBindingFlagsEXT::empty(),
             vk::DescriptorBindingFlagsEXT::empty(),
             vk::DescriptorBindingFlagsEXT::empty(),
             vk::DescriptorBindingFlagsEXT::empty(),
@@ -537,6 +517,16 @@ impl<'a> VkController<'a> {
                                     | vk::ShaderStageFlags::CLOSEST_HIT_KHR,
                             )
                             .binding(3),
+                        vk::DescriptorSetLayoutBinding::default() // vertex buffer
+                            .descriptor_count(1)
+                            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                            .stage_flags(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
+                            .binding(4),
+                        vk::DescriptorSetLayoutBinding::default() // index buffer
+                            .descriptor_count(1)
+                            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                            .stage_flags(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
+                            .binding(5),
                     ])
                     .push_next(&mut rt_binding_flags),
                 None,
@@ -548,15 +538,17 @@ impl<'a> VkController<'a> {
             descriptor_count: 1,
         }];
 
-        const RGEN_SHADER: &[u8] = include_bytes!("..\\shaders\\spv\\rgen.spv");
-        const RCHIT_SHADER: &[u8] = include_bytes!("..\\shaders\\spv\\rchit.spv");
-        const RMISS_SHADER: &[u8] = include_bytes!("..\\shaders\\spv\\rmiss.spv");
-        const RINT_SHADER: &[u8] = include_bytes!("..\\shaders\\spv\\rint.spv");
+        const RGEN_SHADER: &[u8] = include_bytes!("..\\shaders\\spv\\ao_rgen.spv");
+        const MAIN_RCHIT_SHADER: &[u8] = include_bytes!("..\\shaders\\spv\\main_pass_rchit.spv");
+        const AO_RCHIT_SHADER: &[u8] = include_bytes!("..\\shaders\\spv\\ao_pass_rchit.spv");
+        const RMISS_SHADER: &[u8] = include_bytes!("..\\shaders\\spv\\ao_rmiss.spv");
+        // const RINT_SHADER: &[u8] = include_bytes!("..\\shaders\\spv\\rint.spv");
 
         let rgen_module = unsafe { create_shader_module(&self.device, RGEN_SHADER) }?;
-        let rchit_module = unsafe { create_shader_module(&self.device, RCHIT_SHADER) }?;
+        let main_rchit_module = unsafe { create_shader_module(&self.device, MAIN_RCHIT_SHADER) }?;
+        let ao_rchit_module = unsafe { create_shader_module(&self.device, AO_RCHIT_SHADER) }?;
         let rmiss_module = unsafe { create_shader_module(&self.device, RMISS_SHADER) }?;
-        let rint_module = unsafe { create_shader_module(&self.device, RINT_SHADER) }?;
+        // let rint_module = unsafe { create_shader_module(&self.device, RINT_SHADER) }?;
 
         let uniforms_binding_flags_inner = [vk::DescriptorBindingFlagsEXT::empty()];
 
@@ -603,13 +595,20 @@ impl<'a> VkController<'a> {
                 .closest_hit_shader(vk::SHADER_UNUSED_KHR)
                 .any_hit_shader(vk::SHADER_UNUSED_KHR)
                 .intersection_shader(vk::SHADER_UNUSED_KHR),
-            // group1 = [ chit ]
+            // group1 = [ chit main pass ]
             vk::RayTracingShaderGroupCreateInfoKHR::default()
-                .ty(vk::RayTracingShaderGroupTypeKHR::PROCEDURAL_HIT_GROUP)
+                .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
                 .general_shader(vk::SHADER_UNUSED_KHR)
                 .closest_hit_shader(1)
                 .any_hit_shader(vk::SHADER_UNUSED_KHR)
-                .intersection_shader(2),
+                .intersection_shader(vk::SHADER_UNUSED_KHR),
+            // group1 = [ chit ao pass ]
+            vk::RayTracingShaderGroupCreateInfoKHR::default()
+                .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
+                .general_shader(vk::SHADER_UNUSED_KHR)
+                .closest_hit_shader(2)
+                .any_hit_shader(vk::SHADER_UNUSED_KHR)
+                .intersection_shader(vk::SHADER_UNUSED_KHR),
             // group3 = [ miss ]
             vk::RayTracingShaderGroupCreateInfoKHR::default()
                 .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
@@ -626,11 +625,11 @@ impl<'a> VkController<'a> {
                 .name(std::ffi::CStr::from_bytes_with_nul(b"main\0")?),
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-                .module(rchit_module)
+                .module(main_rchit_module)
                 .name(std::ffi::CStr::from_bytes_with_nul(b"main\0")?),
             vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::INTERSECTION_KHR)
-                .module(rint_module)
+                .stage(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
+                .module(ao_rchit_module)
                 .name(std::ffi::CStr::from_bytes_with_nul(b"main\0")?),
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::MISS_KHR)
@@ -655,9 +654,9 @@ impl<'a> VkController<'a> {
 
         unsafe {
             self.device.destroy_shader_module(rgen_module, None);
-            self.device.destroy_shader_module(rchit_module, None);
+            self.device.destroy_shader_module(main_rchit_module, None);
+            self.device.destroy_shader_module(ao_rchit_module, None);
             self.device.destroy_shader_module(rmiss_module, None);
-            self.device.destroy_shader_module(rint_module, None);
         }
 
         let rt_descriptor_sets = unsafe {
@@ -711,16 +710,16 @@ impl<'a> VkController<'a> {
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .image_info(&image_info);
 
-        let colors_buffer_info = [vk::DescriptorBufferInfo::default()
-            .buffer(self.colors_buffer.as_ref().unwrap().buffer)
+        let palette_buffer_info = [vk::DescriptorBufferInfo::default()
+            .buffer(self.palette_buffer.as_ref().unwrap().buffer)
             .range(vk::WHOLE_SIZE)];
 
-        let colors_buffer_write = vk::WriteDescriptorSet::default()
+        let palette_buffer_write = vk::WriteDescriptorSet::default()
             .dst_set(rt_descriptor_set)
             .dst_binding(2)
             .dst_array_element(0)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .buffer_info(&colors_buffer_info);
+            .buffer_info(&palette_buffer_info);
 
         let voxels_buffer_info = [vk::DescriptorBufferInfo::default()
             .buffer(self.voxels_buffer.as_ref().unwrap().buffer)
@@ -733,13 +732,37 @@ impl<'a> VkController<'a> {
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .buffer_info(&voxels_buffer_info);
 
+        let vertex_buffer_info = [vk::DescriptorBufferInfo::default()
+            .buffer(self.vertex_buffer.as_ref().unwrap().buffer)
+            .range(vk::WHOLE_SIZE)];
+
+        let vertex_buffer_write = vk::WriteDescriptorSet::default()
+            .dst_set(rt_descriptor_set)
+            .dst_binding(4)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(&vertex_buffer_info);
+
+        let index_buffer_info = [vk::DescriptorBufferInfo::default()
+            .buffer(self.index_buffer.as_ref().unwrap().buffer)
+            .range(vk::WHOLE_SIZE)];
+
+        let index_buffer_write = vk::WriteDescriptorSet::default()
+            .dst_set(rt_descriptor_set)
+            .dst_binding(4)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(&index_buffer_info);
+
         unsafe {
             self.device.update_descriptor_sets(
                 &[
                     accel_write,
                     image_write,
-                    colors_buffer_write,
+                    palette_buffer_write,
                     voxels_buffer_write,
+                    vertex_buffer_write,
+                    index_buffer_write,
                 ],
                 &[],
             );
@@ -776,58 +799,100 @@ impl<'a> VkController<'a> {
         Ok(())
     }
 
-    fn create_geometry(&mut self) {
-        let aabb_buffer = {
-            let corners = [vk::AabbPositionsKHR {
-                min_x: 0.0,
-                min_y: 0.0,
-                min_z: 0.0,
-                max_x: 1.0,
-                max_y: 1.0,
-                max_z: 1.0,
-            }];
+    fn create_blas_geometry(&mut self) {
+        let vertex_buffer = {
+            // cube vertex buffer
+            let vertices = [
+                // front
+                glm::vec3::<f32>(-1.0, -1.0, 1.0),
+                glm::vec3::<f32>(1.0, -1.0, 1.0),
+                glm::vec3::<f32>(1.0, 1.0, 1.0),
+                glm::vec3::<f32>(-1.0, 1.0, 1.0),
+                // back
+                glm::vec3::<f32>(-1.0, -1.0, -1.0),
+                glm::vec3::<f32>(1.0, -1.0, -1.0),
+                glm::vec3::<f32>(1.0, 1.0, -1.0),
+                glm::vec3::<f32>(-1.0, 1.0, -1.0),
+            ];
 
-            let aabb_stride = std::mem::size_of::<vk::AabbPositionsKHR>();
-            let buffer_size = (aabb_stride * corners.len()) as vk::DeviceSize;
+            let stride = std::mem::size_of::<glm::Vec3>();
+            let buffer_size = (stride * vertices.len()) as vk::DeviceSize;
 
-            let mut aabb_buffer = BufferResource::new(
+            let mut buffer = BufferResource::new(
                 buffer_size,
                 vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                    | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+                    | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+                    | vk::BufferUsageFlags::STORAGE_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
                 &self.device,
                 self.device_memory_properties,
             );
 
-            aabb_buffer.store(&corners, &self.device);
+            buffer.store(&vertices, &self.device);
 
-            aabb_buffer
+            buffer
+        };
+
+        let index_buffer = {
+            // cube index buffer
+            let indices: [u32; 36] = [
+                0, 1, 2, 2, 3, 0, // front OK
+                1, 5, 6, 6, 2, 1, // right OK
+                7, 6, 5, 5, 4, 7, // back OK
+                4, 0, 3, 3, 7, 4, // left NOT OK
+                4, 5, 1, 1, 0, 4, // bottom NOT OK
+                3, 2, 6, 6, 7, 3, // top NOT OK
+            ];
+
+            let stride = std::mem::size_of::<glm::Vec3>();
+            let buffer_size = (stride * indices.len()) as vk::DeviceSize;
+
+            let mut buffer = BufferResource::new(
+                buffer_size,
+                vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                    | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+                    | vk::BufferUsageFlags::STORAGE_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                &self.device,
+                self.device_memory_properties,
+            );
+
+            buffer.store(&indices, &self.device);
+
+            buffer
         };
 
         let geometry = vk::AccelerationStructureGeometryKHR::default()
-            .geometry_type(vk::GeometryTypeKHR::AABBS)
+            .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
             .geometry(vk::AccelerationStructureGeometryDataKHR {
-                aabbs: vk::AccelerationStructureGeometryAabbsDataKHR::default().data(
-                    vk::DeviceOrHostAddressConstKHR {
+                triangles: vk::AccelerationStructureGeometryTrianglesDataKHR::default()
+                    .index_type(vk::IndexType::UINT32)
+                    .index_data(vk::DeviceOrHostAddressConstKHR {
                         device_address: unsafe {
-                            get_buffer_device_address(&self.device, aabb_buffer.buffer)
+                            get_buffer_device_address(&self.device, index_buffer.buffer)
                         },
-                    },
-                ),
+                    })
+                    .vertex_format(vk::Format::R32G32B32_SFLOAT)
+                    .vertex_stride(size_of::<glm::Vec3>() as u64)
+                    .vertex_data(vk::DeviceOrHostAddressConstKHR {
+                        device_address: unsafe {
+                            get_buffer_device_address(&self.device, vertex_buffer.buffer)
+                        },
+                    })
+                    .max_vertex(3),
             })
             .flags(vk::GeometryFlagsKHR::OPAQUE);
 
         self.as_geometry = Some(geometry);
-        self.aabb_buffer = Some(aabb_buffer);
+        self.index_buffer = Some(index_buffer);
+        self.vertex_buffer = Some(vertex_buffer);
     }
 
-    fn create_bottom_as(&mut self) {
-        let build_range_info = vk::AccelerationStructureBuildRangeInfoKHR::default()
-            .primitive_count(1)
-            .primitive_offset(0)
-            .transform_offset(0);
+    fn create_blas(&mut self) {
+        let build_range_info =
+            vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(12);
 
-        let geometries: [vk::AccelerationStructureGeometryKHR; 1] = [self.as_geometry.unwrap()];
+        let geometries: [vk::AccelerationStructureGeometryKHR<'a>; 1] = [self.as_geometry.unwrap()];
 
         let mut build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
             .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
@@ -842,7 +907,7 @@ impl<'a> VkController<'a> {
                 .get_acceleration_structure_build_sizes(
                     vk::AccelerationStructureBuildTypeKHR::DEVICE,
                     &build_info,
-                    &[1],
+                    &[12],
                     &mut size_info,
                 )
         };
@@ -911,9 +976,11 @@ impl<'a> VkController<'a> {
                     &[build_info],
                     &[&[build_range_info]],
                 );
+
             self.device
                 .end_command_buffer(build_command_buffer)
                 .unwrap();
+
             self.device
                 .queue_submit(
                     self.graphics_queue,
@@ -923,8 +990,10 @@ impl<'a> VkController<'a> {
                 .expect("queue submit failed.");
 
             self.device.queue_wait_idle(self.graphics_queue).unwrap();
+
             self.device
                 .free_command_buffers(self.pool, &[build_command_buffer]);
+
             scratch_buffer.destroy(&self.device);
         }
 
@@ -932,7 +1001,7 @@ impl<'a> VkController<'a> {
         self.bottom_as_buffer = Some(bottom_as_buffer);
     }
 
-    fn create_as_instances(&mut self) {
+    fn create_tlas_instances(&mut self) {
         let accel_handle = {
             let as_addr_info = vk::AccelerationStructureDeviceAddressInfoKHR::default()
                 .acceleration_structure(self.bottom_as.unwrap());
@@ -942,11 +1011,38 @@ impl<'a> VkController<'a> {
             }
         };
 
-        let model = self.vox_model.models.get(0).unwrap().voxels.clone();
         // let (instances, voxels) = create_cube_instances(accel_handle, 1024, 0.01);
-        let (instances, voxels) = vox_to_tlas(accel_handle, model);
 
-        self.voxels_positions = Some(voxels);
+        let model = self.vox_model.models.get(0).unwrap().voxels.clone();
+        let (instances, _voxels) = vox_to_tlas(accel_handle, model);
+
+        // let instances = [vk::AccelerationStructureInstanceKHR {
+        //     transform: vk::TransformMatrixKHR {
+        //         matrix: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        //     },
+        //     instance_custom_index_and_mask: vk::Packed24_8::new(0, 0xff),
+        //     instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(0, 0),
+        //     acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
+        //         device_handle: accel_handle,
+        //     },
+        // }];
+
+        let model_voxels = &self.vox_model.models.get(0).unwrap().voxels;
+
+        let voxels_infos = {
+            let mut list = vec![];
+
+            for v in model_voxels {
+                list.push(VoxelInfos {
+                    position: glm::vec3(f32::from(v.x), f32::from(v.z), f32::from(v.y)),
+                    palette_index: v.i.into(),
+                });
+            }
+
+            list
+        };
+
+        self.voxels_infos = Some(voxels_infos);
 
         let instance_buffer_size =
             std::mem::size_of::<vk::AccelerationStructureInstanceKHR>() * instances.len();
@@ -966,12 +1062,9 @@ impl<'a> VkController<'a> {
         self.instance_buffer = Some(instance_buffer);
     }
 
-    fn create_top_as(&mut self) {
+    fn create_tlas(&mut self) {
         let build_range_info = vk::AccelerationStructureBuildRangeInfoKHR::default()
-            .first_vertex(0)
-            .primitive_count(self.instance_count.unwrap() as u32)
-            .primitive_offset(0)
-            .transform_offset(0);
+            .primitive_count(self.instance_count.unwrap() as u32);
 
         let build_command_buffer = {
             let allocate_info = vk::CommandBufferAllocateInfo::default()
@@ -992,9 +1085,11 @@ impl<'a> VkController<'a> {
                         .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
                 )
                 .unwrap();
+
             let memory_barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
                 .dst_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR);
+
             self.device.cmd_pipeline_barrier(
                 build_command_buffer,
                 vk::PipelineStageFlags::TRANSFER,
@@ -1030,6 +1125,7 @@ impl<'a> VkController<'a> {
             .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL);
 
         let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
+
         unsafe {
             self.acceleration_structure_loader
                 .get_acceleration_structure_build_sizes(
@@ -1106,20 +1202,20 @@ impl<'a> VkController<'a> {
         self.top_as_buffer = Some(top_as_buffer);
     }
 
-    pub fn create_colors_buffer(&mut self) {
-        let colors = get_palette(&self.vox_model);
-        let data = bytes_of(&colors);
+    pub fn create_palette_buffer(&mut self) {
+        let palette = get_palette(&self.vox_model);
+        let data = bytes_of(&palette);
 
-        let mut colors_buffer = BufferResource::new(
-            std::mem::size_of_val(&colors) as u64,
+        let mut palette_buffer = BufferResource::new(
+            std::mem::size_of_val(&palette) as u64,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             &self.device,
             self.device_memory_properties,
         );
-        colors_buffer.store(&data, &self.device);
+        palette_buffer.store(&data, &self.device);
 
-        self.colors_buffer = Some(colors_buffer);
+        self.palette_buffer = Some(palette_buffer);
     }
 
     pub fn create_uniforms_buffer(&mut self) {
@@ -1140,13 +1236,13 @@ impl<'a> VkController<'a> {
     }
 
     fn create_data_structures(&mut self) {
-        self.create_geometry();
-        self.create_bottom_as();
-        self.create_as_instances();
-        self.create_top_as();
-        self.create_colors_buffer();
+        self.create_blas_geometry();
+        self.create_blas();
+        self.create_tlas_instances();
+        self.create_tlas();
+        self.create_palette_buffer();
 
-        let voxels = self.voxels_positions.as_ref().unwrap().as_slice();
+        let voxels = self.voxels_infos.as_ref().unwrap().as_slice();
 
         let mut voxels_buffer = BufferResource::new(
             std::mem::size_of_val(voxels) as u64,
@@ -1225,9 +1321,9 @@ impl<'a> VkController<'a> {
             shader_binding_table_buffer
         };
 
-        // |[ raygen shader ]|[ hit shader  ]|[ miss shader ]|
-        // |                 |               |               |
-        // | 0               | 1             | 2             | 3
+        // |[ raygen shader ]|[ hit shader  ]|[ao hit shader]|[ miss shader ]|
+        // |                 |               |               |               |
+        // | 0               | 1             | 2             | 3             |
 
         let sbt_address =
             unsafe { get_buffer_device_address(&self.device, shader_binding_table_buffer.buffer) };
@@ -1238,13 +1334,13 @@ impl<'a> VkController<'a> {
             .stride(handle_size_aligned);
 
         let sbt_miss_region = vk::StridedDeviceAddressRegionKHR::default()
-            .device_address(sbt_address + 2 * handle_size_aligned)
+            .device_address(sbt_address + 3 * handle_size_aligned)
             .size(handle_size_aligned)
             .stride(handle_size_aligned);
 
         let sbt_hit_region = vk::StridedDeviceAddressRegionKHR::default()
             .device_address(sbt_address + handle_size_aligned)
-            .size(handle_size_aligned)
+            .size(handle_size_aligned * 2)
             .stride(handle_size_aligned);
 
         let sbt_call_region = vk::StridedDeviceAddressRegionKHR::default();
@@ -1286,6 +1382,7 @@ impl<'a> VkController<'a> {
     fn create_image_views(&mut self) -> anyhow::Result<()> {
         let present_images =
             unsafe { self.swapchain_loader.get_swapchain_images(self.swapchain) }.unwrap();
+
         let present_image_views: Vec<vk::ImageView> = present_images
             .iter()
             .map(|&image| {
@@ -1306,6 +1403,7 @@ impl<'a> VkController<'a> {
                         layer_count: 1,
                     })
                     .image(image);
+
                 unsafe { self.device.create_image_view(&create_view_info, None) }.unwrap()
             })
             .collect();
@@ -1791,9 +1889,11 @@ impl Drop for VkController<'_> {
 
             destroy_buffer!(self.bottom_as_buffer, self.device);
             destroy_buffer!(self.top_as_buffer, self.device);
-            destroy_buffer!(self.colors_buffer, self.device);
+            destroy_buffer!(self.palette_buffer, self.device);
             destroy_buffer!(self.instance_buffer, self.device);
-            destroy_buffer!(self.aabb_buffer, self.device);
+            // destroy_buffer!(self.aabb_buffer, self.device);
+            destroy_buffer!(self.index_buffer, self.device);
+            destroy_buffer!(self.vertex_buffer, self.device);
             destroy_buffer!(self.shader_binding_table_buffer, self.device);
             destroy_buffer!(self.uniforms_buffer, self.device);
             destroy_buffer!(self.voxels_buffer, self.device);

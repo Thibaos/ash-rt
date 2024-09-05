@@ -1,19 +1,16 @@
 use ash::vk;
 use rand::Rng;
 
-use crate::uniform_types::VoxelPosition;
+use crate::uniform_types::VoxelInfos;
 
 #[allow(unused)]
 pub fn create_cube_instances(
     accel_handle: u64,
     n: u64,
     p: f32,
-) -> (
-    Vec<vk::AccelerationStructureInstanceKHR>,
-    Vec<VoxelPosition>,
-) {
+) -> (Vec<vk::AccelerationStructureInstanceKHR>, Vec<VoxelInfos>) {
     let mut instances = Vec::<vk::AccelerationStructureInstanceKHR>::new();
-    let mut positions = Vec::<VoxelPosition>::new();
+    let mut positions = Vec::<VoxelInfos>::new();
 
     let mut rng = rand::thread_rng();
 
@@ -48,9 +45,9 @@ pub fn create_cube_instances(
             };
 
             instances.push(instance);
-            positions.push(VoxelPosition {
+            positions.push(VoxelInfos {
                 position: glm::Vec3::new(x as f32, y as f32, z as f32),
-                _pad: 0.0,
+                palette_index: 0,
             });
         }
     }

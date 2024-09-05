@@ -1,6 +1,14 @@
-use ash::vk;
+#![allow(unused)]
 
-use crate::uniform_types::VoxelPosition;
+use ash::{
+    vk::{self, AabbPositionsKHR},
+    Device,
+};
+
+use crate::{
+    uniform_types::VoxelInfos,
+    utils::{get_buffer_device_address, BufferResource},
+};
 
 pub fn open_file(path: &str) -> dot_vox::DotVoxData {
     let vox_data = dot_vox::load(path).unwrap();
@@ -55,12 +63,9 @@ pub fn open_file(path: &str) -> dot_vox::DotVoxData {
 pub fn vox_to_tlas(
     as_device_handle: u64,
     input_voxels: Vec<dot_vox::Voxel>,
-) -> (
-    Vec<vk::AccelerationStructureInstanceKHR>,
-    Vec<VoxelPosition>,
-) {
+) -> (Vec<vk::AccelerationStructureInstanceKHR>, Vec<VoxelInfos>) {
     let mut instances = Vec::<vk::AccelerationStructureInstanceKHR>::new();
-    let mut positions = Vec::<VoxelPosition>::new();
+    let mut positions = Vec::<VoxelInfos>::new();
 
     for vox in input_voxels {
         let x = f32::from(vox.x);
@@ -79,15 +84,135 @@ pub fn vox_to_tlas(
         };
 
         instances.push(instance);
-        positions.push(VoxelPosition {
+        positions.push(VoxelInfos {
             position: glm::Vec3::new(x, y, z),
-            _pad: 0.0,
+            palette_index: 0,
         });
     }
 
     println!("Loaded {} voxels", instances.len());
 
     (instances, positions)
+}
+
+pub fn vox_to_blas<'a>(
+    input_voxels: &Vec<dot_vox::Voxel>,
+    device: &Device,
+    device_memory_properties: vk::PhysicalDeviceMemoryProperties,
+) -> vk::AccelerationStructureGeometryKHR<'a> {
+    let aabb_buffer = {
+        let mut corners = Vec::<AabbPositionsKHR>::new();
+
+        for voxel in input_voxels {
+            let x = f32::from(voxel.x);
+            let y = f32::from(voxel.z);
+            let z = f32::from(voxel.y);
+
+            corners.push(AabbPositionsKHR {
+                min_x: x - 0.5,
+                min_y: y - 0.5,
+                min_z: z - 0.5,
+                max_x: x + 0.5,
+                max_y: y + 0.5,
+                max_z: z + 0.5,
+            })
+        }
+
+        let aabb_stride = std::mem::size_of::<vk::AabbPositionsKHR>();
+        let buffer_size = (aabb_stride * corners.len()) as vk::DeviceSize;
+
+        let mut aabb_buffer = BufferResource::new(
+            buffer_size,
+            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            device,
+            device_memory_properties,
+        );
+
+        aabb_buffer.store(&corners, device);
+
+        aabb_buffer
+    };
+
+    let geometry = vk::AccelerationStructureGeometryKHR::default()
+        .geometry_type(vk::GeometryTypeKHR::AABBS)
+        .geometry(vk::AccelerationStructureGeometryDataKHR {
+            aabbs: vk::AccelerationStructureGeometryAabbsDataKHR::default().data(
+                vk::DeviceOrHostAddressConstKHR {
+                    device_address: unsafe {
+                        get_buffer_device_address(device, aabb_buffer.buffer)
+                    },
+                },
+            ),
+        })
+        .flags(vk::GeometryFlagsKHR::OPAQUE);
+
+    geometry
+}
+
+pub fn vox_to_geometries<'a>(
+    input_voxels: &Vec<dot_vox::Voxel>,
+    device: &Device,
+    device_memory_properties: vk::PhysicalDeviceMemoryProperties,
+) -> (BufferResource, vk::AccelerationStructureGeometryKHR<'a>) {
+    let voxel_count = input_voxels.len();
+
+    let aabb_buffer = {
+        let mut corners = Vec::<AabbPositionsKHR>::new();
+
+        for voxel in input_voxels {
+            let x = f32::from(voxel.x);
+            let y = f32::from(voxel.z);
+            let z = f32::from(voxel.y);
+
+            corners.push(AabbPositionsKHR {
+                min_x: x - 0.5,
+                min_y: y - 0.5,
+                min_z: z - 0.5,
+                max_x: x + 0.5,
+                max_y: y + 0.5,
+                max_z: z + 0.5,
+            })
+        }
+
+        let aabb_stride = std::mem::size_of::<vk::AabbPositionsKHR>();
+        let buffer_size = (aabb_stride * corners.len()) as vk::DeviceSize;
+
+        let mut aabb_buffer = BufferResource::new(
+            buffer_size,
+            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            device,
+            device_memory_properties,
+        );
+
+        aabb_buffer.store(&corners, device);
+
+        aabb_buffer
+    };
+
+    // let host_data = unsafe { std::mem::transmute(0u8) };
+
+    let geometry = vk::AccelerationStructureGeometryKHR::default()
+        .geometry_type(vk::GeometryTypeKHR::AABBS)
+        .geometry(vk::AccelerationStructureGeometryDataKHR {
+            triangles: vk::AccelerationStructureGeometryTrianglesDataKHR::default()
+                .index_type(vk::IndexType::UINT32)
+                .max_vertex(3),
+        })
+        .flags(vk::GeometryFlagsKHR::OPAQUE);
+
+    // aabbs: vk::AccelerationStructureGeometryAabbsDataKHR::default().data(
+    //     vk::DeviceOrHostAddressConstKHR {
+    //         device_address: unsafe {
+    //             get_buffer_device_address(device, aabb_buffer.buffer)
+    //         },
+    //     },
+    // ),
+
+    (aabb_buffer, geometry)
 }
 
 pub fn get_palette(data: &dot_vox::DotVoxData) -> [glm::Vec3; 256] {
