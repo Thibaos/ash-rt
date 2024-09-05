@@ -286,11 +286,6 @@ impl BufferResource {
     }
 }
 
-#[allow(unused)]
-fn lerp(start: bevy_math::Vec3, end: bevy_math::Vec3, delta: f32) -> bevy_math::Vec3 {
-    start + (end - start) * delta
-}
-
 pub unsafe fn create_shader_module(
     device: &ash::Device,
     code: &[u8],

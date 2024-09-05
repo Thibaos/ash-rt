@@ -1,1 +1,16 @@
-- refactor vk_controller features into separate wrappers
+- change voxels as BLAS, many TLAS instances -> models as BLAS, few TLAS instances
+- BLAS as hierarchical cube sizes, split TLAS instances accordingly
+
+- use bevy, or fork godot??
+- storage management
+- mutation
+- materials
+- scenes
+- physics
+- ui
+- debugging tools
+- shader recompilation
+- hot reload
+- audio
+- tests
+- refactoring
