@@ -39,7 +39,7 @@ void main() {
 
     // first pass
     {
-        const uint ray_flags = gl_RayFlagsTerminateOnFirstHitEXT;
+        const uint ray_flags = gl_RayFlagsOpaqueEXT;
 
         payload.color = vec3(0.0);
         payload.t = -1.0;
@@ -50,7 +50,7 @@ void main() {
     }
 
     // reflection pass
-    {
+    if (false) {
         const uint ray_flags = gl_RayFlagsOpaqueEXT;
 
         payload.color = vec3(0.0);
@@ -76,7 +76,7 @@ void main() {
         }
     }
 
-    vec3 final_color = first_hit_color / 2.0 + first_hit_color * reflection_color;
+    //vec3 final_color = first_hit_color / 2.0 + first_hit_color * reflection_color;
 
     imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(first_hit_color, 1.0));
 }

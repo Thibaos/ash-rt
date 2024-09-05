@@ -10,6 +10,7 @@
 
 struct Voxel {
   vec4 position;
+  float palette_index;
 };
 
 struct Aabb
@@ -54,7 +55,7 @@ void main() {
     vec3 origin = gl_WorldRayOriginEXT;
     vec3 direction = gl_WorldRayDirectionEXT;
 
-    Voxel voxel = allVoxels[gl_InstanceID];
+    Voxel voxel = allVoxels[gl_GeometryIndexEXT];
 
     Aabb aabb;
     aabb.minimum = voxel.position.xyz;

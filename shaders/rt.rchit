@@ -9,13 +9,15 @@
 #include "common.glsl"
 
 struct Voxel {
-  vec4 position;
+  vec3 position;
+  uint palette_index;
 };
 
 layout(location = 0) rayPayloadInEXT RayPayload incoming_payload;
 
-layout(set = 0, binding = 2, scalar) uniform _vec3 { vec3 colors[256]; } colors_buffer;
+layout(set = 0, binding = 2, scalar) uniform _vec3 { vec3 palette[256]; } palette_buffer;
 layout(set = 0, binding = 3, scalar) buffer voxels { Voxel allVoxels[]; };
+
 
 void main() {
     vec3 normals[6] = vec3[](
@@ -26,12 +28,12 @@ void main() {
         vec3(0., 0., 1.),
         vec3(0., 1., 0.)
     );
-    const Voxel voxel = allVoxels[gl_PrimitiveID];
+    const Voxel voxel = allVoxels[gl_InstanceID];
 
     const vec3 hit_point = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_RayTmaxEXT;
     const vec3 normal = normals[gl_HitKindEXT];
 
-    incoming_payload.color = colors_buffer.colors[gl_InstanceCustomIndexEXT];
+    incoming_payload.color = palette_buffer.palette[voxel.palette_index];
     incoming_payload.origin = hit_point;
     incoming_payload.direction = reflect(gl_WorldRayDirectionEXT, normal);
     incoming_payload.t = 1.0;
