@@ -26,12 +26,10 @@ struct App<'a> {
 
 impl ApplicationHandler for App<'static> {
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        self.base
-            .as_mut()
-            .unwrap()
-            .vk_controller
-            .window
-            .request_redraw();
+        let base = self.base.as_mut().unwrap();
+        if base.focused {
+            base.vk_controller.window.request_redraw();
+        }
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -65,6 +63,7 @@ impl ApplicationHandler for App<'static> {
         _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
+        let base = self.base.as_mut().unwrap();
         match event {
             WindowEvent::CloseRequested
             | WindowEvent::KeyboardInput {
@@ -76,6 +75,17 @@ impl ApplicationHandler for App<'static> {
                     },
                 ..
             } => event_loop.exit(),
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        state: ElementState::Pressed,
+                        physical_key: keyboard::PhysicalKey::Code(keyboard::KeyCode::KeyQ),
+                        ..
+                    },
+                ..
+            } => {
+                println!("position: {}", base.camera.transform.translation)
+            }
             WindowEvent::Resized(_) => self.base.as_mut().unwrap().resized = true,
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
@@ -85,19 +95,11 @@ impl ApplicationHandler for App<'static> {
             WindowEvent::MouseWheel {
                 delta: MouseScrollDelta::LineDelta(_, y),
                 ..
-            } => self
-                .base
-                .as_mut()
-                .unwrap()
-                .player_controller
-                .handle_speed_change(y),
-            WindowEvent::KeyboardInput { event, .. } => self
-                .base
-                .as_mut()
-                .unwrap()
-                .player_controller
-                .handle_keyboard_event(event),
-            WindowEvent::RedrawRequested => self.base.as_mut().unwrap().main_loop(),
+            } => base.player_controller.handle_speed_change(y),
+            WindowEvent::KeyboardInput { event, .. } => {
+                base.player_controller.handle_keyboard_event(event)
+            }
+            WindowEvent::RedrawRequested => base.main_loop(),
             _ => (),
         };
     }
