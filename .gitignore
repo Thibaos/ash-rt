@@ -1,3 +1,4 @@
 /target
 /shaders/spv
 /assets/*/*.png
+*.html
