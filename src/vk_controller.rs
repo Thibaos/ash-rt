@@ -543,13 +543,11 @@ impl<'a> VkController<'a> {
         const MAIN_RCHIT_SHADER: &[u8] = include_bytes!("..\\shaders\\spv\\main_pass_rchit.spv");
         const AO_RCHIT_SHADER: &[u8] = include_bytes!("..\\shaders\\spv\\ao_pass_rchit.spv");
         const RMISS_SHADER: &[u8] = include_bytes!("..\\shaders\\spv\\ao_rmiss.spv");
-        // const RINT_SHADER: &[u8] = include_bytes!("..\\shaders\\spv\\rint.spv");
 
         let rgen_module = unsafe { create_shader_module(&self.device, RGEN_SHADER) }?;
         let main_rchit_module = unsafe { create_shader_module(&self.device, MAIN_RCHIT_SHADER) }?;
         let ao_rchit_module = unsafe { create_shader_module(&self.device, AO_RCHIT_SHADER) }?;
         let rmiss_module = unsafe { create_shader_module(&self.device, RMISS_SHADER) }?;
-        // let rint_module = unsafe { create_shader_module(&self.device, RINT_SHADER) }?;
 
         let uniforms_binding_flags_inner = [vk::DescriptorBindingFlagsEXT::empty()];
 

@@ -1,5 +1,7 @@
 #version 460
 
+// https://github.com/boksajak/RTAO
+
 // RTAO - Low-pass filtering shader, Jakub Boksansky 2018
 
 // ========================================================================

@@ -113,5 +113,5 @@ void main() {
 
     ao_color /= AO_SPP;
 
-    imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(ao_color, 1.0));
+    imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(final_color - ao_color, 1.0));
 }

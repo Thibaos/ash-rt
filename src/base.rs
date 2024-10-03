@@ -184,8 +184,8 @@ impl AppBase<'_> {
 
     pub fn new(event_loop: &ActiveEventLoop, window_width: u32, window_height: u32) -> Self {
         let camera = CameraTransform {
-            transform: Transform::from_xyz(0.0, 0.0, -2.0)
-                .looking_at(bevy_math::Vec3::ZERO, bevy_math::Vec3::Y),
+            transform: Transform::from_xyz(160.0, 64.0, -32.0)
+                .looking_at(bevy_math::Vec3::new(64.0, 48.0, 64.0), bevy_math::Vec3::Y),
         };
 
         let mut vk_controller = VkController::new(event_loop, window_width, window_height);

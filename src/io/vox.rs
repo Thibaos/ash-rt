@@ -14,7 +14,6 @@ pub fn open_file(path: &str) -> dot_vox::DotVoxData {
     let vox_data = dot_vox::load(path).unwrap();
 
     #[cfg(debug_assertions)]
-
     println!("Palette has {} colors", vox_data.palette.len());
 
     // TODO scene support
