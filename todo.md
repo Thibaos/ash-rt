@@ -1,7 +1,7 @@
 - change voxels as BLAS, many TLAS instances -> models as BLAS, few TLAS instances
 - BLAS as hierarchical cube sizes, split TLAS instances accordingly
 
-- use bevy, or fork godot??
+- render graph with passes
 - storage management
 - mutation
 - materials
@@ -10,7 +10,6 @@
 - ui
 - debugging tools
 - shader recompilation
-- hot reload
 - audio
 - tests
 - refactoring

@@ -56,18 +56,19 @@ pub struct VkController<'a> {
     desired_image_count: u32,
     pre_transform: vk::SurfaceTransformFlagsKHR,
     present_mode: vk::PresentModeKHR,
-    pub swapchain: vk::SwapchainKHR,
-    pub present_images: Vec<vk::Image>,
-    present_image_views: Vec<vk::ImageView>,
-    framebuffers: Vec<vk::Framebuffer>,
+    pub swapchain: Option<vk::SwapchainKHR>,
     pool: vk::CommandPool,
+
+    pub present_images: Option<Vec<vk::Image>>,
+    present_image_views: Option<Vec<vk::ImageView>>,
+    framebuffers: Vec<vk::Framebuffer>,
     setup_command_buffer: vk::CommandBuffer,
     pub rt_command_buffer: vk::CommandBuffer,
-    render_pass: vk::RenderPass,
+    render_pass: Option<vk::RenderPass>,
 
-    pub depth_image: vk::Image,
-    pub depth_image_view: vk::ImageView,
-    pub depth_image_memory: vk::DeviceMemory,
+    pub depth_image: Option<vk::Image>,
+    pub depth_image_view: Option<vk::ImageView>,
+    pub depth_image_memory: Option<vk::DeviceMemory>,
 
     pub rt_image: vk::Image,
     pub rt_image_view: vk::ImageView,
@@ -391,19 +392,19 @@ impl<'a> VkController<'a> {
             desired_image_count,
             pre_transform,
             present_mode,
-            swapchain: vk::SwapchainKHR::null(),
-            present_images: Vec::new(),
-            present_image_views: Vec::new(),
-            depth_image: vk::Image::null(),
-            depth_image_view: vk::ImageView::null(),
-            depth_image_memory: vk::DeviceMemory::null(),
+            swapchain: None,
+            present_images: None,
+            present_image_views: None,
+            depth_image: None,
+            depth_image_view: None,
+            depth_image_memory: None,
             rt_image: vk::Image::null(),
             rt_image_view: vk::ImageView::null(),
             rt_image_memory: vk::DeviceMemory::null(),
             rt_descriptor_pool: None,
             rt_descriptor_set: None,
             rt_descriptor_set_layout: None,
-            render_pass: vk::RenderPass::null(),
+            render_pass: None,
             framebuffers: Vec::new(),
             as_geometry: None,
             // aabb_buffer: None,
@@ -438,7 +439,7 @@ impl<'a> VkController<'a> {
     pub fn init(&mut self) {
         self.create_swapchain().unwrap();
         self.create_image_views().unwrap();
-        self.create_framebuffers().unwrap();
+        // self.create_framebuffers().unwrap();
         self.create_rt_image().unwrap();
         self.create_data_structures();
         self.create_descriptor_sets().unwrap();
@@ -1374,14 +1375,17 @@ impl<'a> VkController<'a> {
                 .create_swapchain(&swapchain_create_info, None)
         }?;
 
-        self.swapchain = swapchain;
+        self.swapchain = Some(swapchain);
 
         Ok(())
     }
 
     fn create_image_views(&mut self) -> anyhow::Result<()> {
-        let present_images =
-            unsafe { self.swapchain_loader.get_swapchain_images(self.swapchain) }.unwrap();
+        let present_images = if let Some(swapchain) = self.swapchain {
+            unsafe { self.swapchain_loader.get_swapchain_images(swapchain) }.unwrap()
+        } else {
+            panic!("Swapchain is null!");
+        };
 
         let present_image_views: Vec<vk::ImageView> = present_images
             .iter()
@@ -1496,16 +1500,17 @@ impl<'a> VkController<'a> {
         let depth_image_view =
             unsafe { self.device.create_image_view(&depth_image_view_info, None) }?;
 
-        self.present_images = present_images;
-        self.present_image_views = present_image_views;
+        self.present_images = Some(present_images);
+        self.present_image_views = Some(present_image_views);
 
-        self.depth_image = depth_image;
-        self.depth_image_view = depth_image_view;
-        self.depth_image_memory = depth_image_memory;
+        self.depth_image = Some(depth_image);
+        self.depth_image_view = Some(depth_image_view);
+        self.depth_image_memory = Some(depth_image_memory);
 
         Ok(())
     }
 
+    #[allow(unused)]
     fn create_framebuffers(&mut self) -> anyhow::Result<()> {
         let renderpass_attachments = [
             vk::AttachmentDescription {
@@ -1561,8 +1566,9 @@ impl<'a> VkController<'a> {
         let framebuffers: Vec<vk::Framebuffer> = self
             .present_image_views
             .iter()
+            .flatten()
             .map(|&present_image_view| {
-                let framebuffer_attachments = [present_image_view, self.depth_image_view];
+                let framebuffer_attachments = [present_image_view, self.depth_image_view.unwrap()];
                 let frame_buffer_create_info = vk::FramebufferCreateInfo::default()
                     .render_pass(render_pass)
                     .attachments(&framebuffer_attachments)
@@ -1578,7 +1584,7 @@ impl<'a> VkController<'a> {
             })
             .collect();
 
-        self.render_pass = render_pass;
+        self.render_pass = Some(render_pass);
         self.framebuffers = framebuffers;
 
         Ok(())
@@ -1747,26 +1753,6 @@ impl<'a> VkController<'a> {
             size.width, size.height
         );
 
-        unsafe {
-            self.device.destroy_image_view(self.rt_image_view, None);
-            self.device.destroy_image(self.rt_image, None);
-            self.device.free_memory(self.rt_image_memory, None);
-        }
-
-        for framebuffer in &self.framebuffers {
-            unsafe { self.device.destroy_framebuffer(*framebuffer, None) };
-        }
-
-        unsafe { self.device.destroy_render_pass(self.render_pass, None) };
-
-        for image_view in &self.present_image_views {
-            unsafe { self.device.destroy_image_view(*image_view, None) };
-        }
-
-        unsafe { self.device.destroy_image(self.depth_image, None) };
-        unsafe { self.device.destroy_image_view(self.depth_image_view, None) };
-        unsafe { self.device.free_memory(self.depth_image_memory, None) };
-
         let surface_capabilities = unsafe {
             self.surface_loader
                 .get_physical_device_surface_capabilities(self.physical_device, self.surface)
@@ -1782,7 +1768,7 @@ impl<'a> VkController<'a> {
             surface_capabilities.current_transform
         };
 
-        let old_swapchain = self.swapchain;
+        let old_swapchain = self.swapchain.unwrap();
 
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
             .surface(self.surface)
@@ -1804,14 +1790,12 @@ impl<'a> VkController<'a> {
                 .create_swapchain(&swapchain_create_info, None)
         }?;
 
-        unsafe {
-            self.swapchain_loader.destroy_swapchain(old_swapchain, None);
-        }
+        self.cleanup_swapchain()?;
 
-        self.swapchain = swapchain;
+        self.swapchain = Some(swapchain);
 
         self.create_image_views()?;
-        self.create_framebuffers()?;
+        // self.create_framebuffers()?;
         self.create_rt_image()?;
 
         Ok(())
@@ -1828,20 +1812,27 @@ impl<'a> VkController<'a> {
             unsafe { self.device.destroy_framebuffer(*framebuffer, None) };
         }
 
-        unsafe { self.device.destroy_render_pass(self.render_pass, None) };
+        if let Some(render_pass) = self.render_pass {
+            unsafe { self.device.destroy_render_pass(render_pass, None) };
+        }
 
-        for image_view in &self.present_image_views {
+        for image_view in self.present_image_views.iter().flatten() {
             unsafe { self.device.destroy_image_view(*image_view, None) };
         }
 
-        unsafe { self.device.destroy_image(self.depth_image, None) };
-        unsafe { self.device.destroy_image_view(self.depth_image_view, None) };
-        unsafe { self.device.free_memory(self.depth_image_memory, None) };
+        if let Some(depth_image) = self.depth_image {
+            unsafe { self.device.destroy_image(depth_image, None) };
+        }
+        if let Some(depth_image_view) = self.depth_image_view {
+            unsafe { self.device.destroy_image_view(depth_image_view, None) };
+        }
+        if let Some(depth_image_memory) = self.depth_image_memory {
+            unsafe { self.device.free_memory(depth_image_memory, None) };
+        }
 
-        unsafe {
-            self.swapchain_loader
-                .destroy_swapchain(self.swapchain, None)
-        };
+        if let Some(swapchain) = self.swapchain {
+            unsafe { self.swapchain_loader.destroy_swapchain(swapchain, None) };
+        }
 
         Ok(())
     }

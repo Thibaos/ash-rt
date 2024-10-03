@@ -38,44 +38,29 @@ vec3 randomHemispherePoint(vec2 rand, vec3 n) {
     return v * sign(dot(v, n));
 }
 
-vec3 rotate_vector(vec3 from, vec3 to) {
-    float theta = dot(from, to) * 2 * PI;
+vec3 rotate_around_y(vec3 a, vec3 normal) {
+    float theta = atan(normal.y, normal.x);
+    float phi = acos(normal.z);
 
-    mat3 g = mat3(
-        cos(theta), -sin(theta), 0.0,
-        sin(theta), cos(theta), 0.0,
-        0.0, 0.0, 0.0
-    );
+    mat3 R_y = mat3(cos(phi), 0.0, sin(phi), 0.0, 1.0, 0.0, -sin(phi), 0.0, cos(phi));
+    mat3 R_z = mat3(cos(phi), -sin(phi), 0.0, sin(phi), cos(phi), 0.0, 0, 0, 1);
 
-    return vec3(0.0);
+    mat3 R = R_z * R_y;
+    vec3 rotated = R_z * (R_y * a);
+
+    return rotated;
 }
 
-vec2 Hammersley(float i, float numSamples) {
-    uint b = uint(i);
+vec3 random_hemisphere(vec2 uv) {
+    const float m = 1.0;
+    float theta = acos(pow(1.0 - uv.x, 1.0 / (1.0 + m)));
+    float phi = 2.0 * PI * uv.y;
 
-    b = (b << 16u) | (b >> 16u);
-    b = ((b & 0x55555555u) << 1u) | ((b & 0xAAAAAAAAu) >> 1u);
-    b = ((b & 0x33333333u) << 2u) | ((b & 0xCCCCCCCCu) >> 2u);
-    b = ((b & 0x0F0F0F0Fu) << 4u) | ((b & 0xF0F0F0F0u) >> 4u);
-    b = ((b & 0x00FF00FFu) << 8u) | ((b & 0xFF00FF00u) >> 8u);
+    float x = sin(theta) * cos(phi);
+    float y = sin(theta) * sin(phi);
+    float z = cos(theta);
 
-    float radicalInverseVDC = float(b) * 2.3283064365386963e-10;
-
-    return vec2((i / numSamples), radicalInverseVDC);
-}
-
-vec3 SampleHemisphere_Uniform(float i, float numSamples) {
-    // Returns a 3D sample vector orientated around (0.0, 1.0, 0.0)
-    // For practical use, must rotate with a rotation matrix (or whatever
-    // your preferred approach is) for use with normals, etc.
-
-	vec2 xi = Hammersley(i, numSamples);
-
-    float phi = xi.y * 2.0 * PI;
-    float cosTheta = 1.0 - xi.x;
-    float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
-
-    return vec3(cos(phi) * sinTheta, cosTheta, sin(phi) * sinTheta);
+    return vec3(x, y, z);
 }
 
 void main() {
@@ -94,7 +79,7 @@ void main() {
     vec3 direction = world_direction;
 
     {
-        const uint ray_flags = gl_RayFlagsOpaqueEXT;
+        const uint ray_flags = gl_RayFlagsOpaqueEXT & gl_RayFlagsCullBackFacingTrianglesEXT;
 
         main_payload.color = vec3(0.0);
         main_payload.t = -1.0;
@@ -102,34 +87,31 @@ void main() {
         traceRayEXT(scene_as, ray_flags, cull_mask, 0u, 0u, 0u, origin, 0.0001, direction, 1000.0, 0);
     }
 
-    vec3 final_color = main_payload.color / 10.0;
+    vec3 final_color = main_payload.color;
 
     vec3 ao_color = vec3(0.0);
 
     if (main_payload.t > 0.0) {
-        for (uint i = 0; i < AO_SPP; i++) {
+        for (uint i = 0; i < float(AO_SPP) / (main_payload.t + 1.0); i++) {
             const uint ray_flags = gl_RayFlagsTerminateOnFirstHitEXT;
             ao_payload.t = 0.0;
 
-            vec3 ao_sample_origin = origin + direction * main_payload.t;
+            vec3 ao_sample_origin = origin + direction * main_payload.t + main_payload.normal * 0.01;
 
-	        vec3 b1 = normalize(direction - main_payload.normal * dot(direction, main_payload.normal));
-	        vec3 b2 = cross(main_payload.normal, b1);
-	        mat3 tbn = mat3(b1, b2, main_payload.normal);
+            float random_x = random(in_uv * 2.0292312);
+            float random_y = random(in_uv * 4.1203922);
 
-            float random_x = random(in_uv);
-            float random_y = random(1.0 - in_uv);
+            // vec3 ao_sample_direction = rotate_around_y(random_hemisphere(vec2(random_x, random_y)), main_payload.normal);
+            vec3 ao_sample_direction = randomHemispherePoint(vec2(random_x, random_y), main_payload.normal);
 
-            vec3 ao_sample_direction = randomHemispherePoint(vec2(0.0, 0.0), main_payload.normal);
+            traceRayEXT(scene_as, ray_flags, cull_mask, 1u, 0u, 0u, ao_sample_origin, FLT_MIN, ao_sample_direction, 1.0, 1);
 
-            traceRayEXT(scene_as, gl_RayFlagsOpaqueEXT, cull_mask, 1u, 0u, 0u, ao_sample_origin, FLT_MIN, ao_sample_direction, 1.0, 1);
-
-            // ao_color += vec3(ao_payload.t);
-            ao_color += main_payload.normal;
+            ao_color += vec3(ao_payload.t);
+            // ao_color += rotate_around_y(ao_sample_direction, main_payload.normal);
         }
     }
 
-    // ao_color /= AO_SPP;
+    ao_color /= AO_SPP;
 
-    imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(final_color + ao_color, 1.0));
+    imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(ao_color, 1.0));
 }

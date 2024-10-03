@@ -13,5 +13,5 @@
 layout(location = 1) rayPayloadInEXT AOPayload incoming_payload;
 
 void main() {
-    incoming_payload.t = 1.0;
+    incoming_payload.t = 1.0 / (gl_RayTmaxEXT * gl_RayTmaxEXT);
 }

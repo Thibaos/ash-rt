@@ -208,6 +208,7 @@ impl AppBase<'_> {
 
     pub fn main_loop(&mut self) {
         let rt_command_buffer = self.vk_controller.rt_command_buffer;
+
         unsafe {
             self.vk_controller
                 .device
@@ -242,7 +243,7 @@ impl AppBase<'_> {
 
         let (present_index, _) = unsafe {
             self.vk_controller.swapchain_loader.acquire_next_image(
-                self.vk_controller.swapchain,
+                self.vk_controller.swapchain.unwrap(),
                 std::u64::MAX,
                 self.vk_controller.present_complete_semaphore,
                 self.vk_controller.swapchain_acquire_fence,
@@ -250,7 +251,8 @@ impl AppBase<'_> {
         }
         .unwrap();
 
-        let current_swapchain_image = self.vk_controller.present_images[present_index as usize];
+        let current_swapchain_image =
+            self.vk_controller.present_images.as_ref().unwrap()[present_index as usize];
 
         unsafe {
             self.vk_controller
@@ -487,7 +489,7 @@ impl AppBase<'_> {
         }
 
         let wait_semaphors = [self.vk_controller.rendering_complete_semaphore];
-        let swapchains = [self.vk_controller.swapchain];
+        let swapchains = [self.vk_controller.swapchain.unwrap()];
         let image_indices = [present_index];
         let present_info = vk::PresentInfoKHR::default()
             .wait_semaphores(&wait_semaphors)
