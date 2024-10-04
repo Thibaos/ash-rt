@@ -16,7 +16,7 @@ pub struct PlayerController {
 impl Default for PlayerController {
     fn default() -> Self {
         Self {
-            speed: 1.0,
+            speed: 64.0,
             forward: false,
             backward: false,
             left: false,

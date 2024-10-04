@@ -98,16 +98,14 @@ void main() {
 
             vec3 ao_sample_origin = origin + direction * main_payload.t + main_payload.normal * 0.01;
 
-            float random_x = random(in_uv * 2.0292312);
-            float random_y = random(in_uv * 4.1203922);
+            float random_x = random(in_uv * 2.0292312) * 2.0 - 1.0;
+            float random_y = random(in_uv * 4.1203922) * 2.0 - 1.0;
 
-            // vec3 ao_sample_direction = rotate_around_y(random_hemisphere(vec2(random_x, random_y)), main_payload.normal);
             vec3 ao_sample_direction = randomHemispherePoint(vec2(random_x, random_y), main_payload.normal);
 
             traceRayEXT(scene_as, ray_flags, cull_mask, 1u, 0u, 0u, ao_sample_origin, FLT_MIN, ao_sample_direction, 1.0, 1);
 
             ao_color += vec3(ao_payload.t);
-            // ao_color += rotate_around_y(ao_sample_direction, main_payload.normal);
         }
     }
 
