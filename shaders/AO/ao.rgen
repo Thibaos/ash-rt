@@ -22,7 +22,13 @@ float random(vec2 st) {
     return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * 43758.5453123);
 }
 
-vec3 randomSpherePoint(vec2 rand) {
+/*
+ * Copyright LWJGL. All rights reserved.
+ * License terms: https://www.lwjgl.org/license
+ */
+
+// From https://github.com/LWJGL/lwjgl3-demos/blob/main/res/org/lwjgl/demo/opengl/raytracing/randomCommon.glsl
+vec3 random_sphere_point(vec2 rand) {
     float ang1 = (rand.x + 1.0) * PI;
     float u = rand.y;
     float u2 = u * u;
@@ -33,8 +39,8 @@ vec3 randomSpherePoint(vec2 rand) {
     return vec3(x, y, z);
 }
 
-vec3 randomHemispherePoint(vec2 rand, vec3 n) {
-    vec3 v = randomSpherePoint(rand);
+vec3 random_hemisphere_point(vec2 rand, vec3 n) {
+    vec3 v = random_sphere_point(rand);
     return v * sign(dot(v, n));
 }
 
@@ -79,15 +85,13 @@ void main() {
     vec3 direction = world_direction;
 
     {
-        const uint ray_flags = gl_RayFlagsOpaqueEXT & gl_RayFlagsCullBackFacingTrianglesEXT;
+        const uint ray_flags = gl_RayFlagsTerminateOnFirstHitEXT & gl_RayFlagsCullBackFacingTrianglesEXT;
 
         main_payload.color = vec3(0.0);
         main_payload.t = -1.0;
 
         traceRayEXT(scene_as, ray_flags, cull_mask, 0u, 0u, 0u, origin, 0.0001, direction, 1000.0, 0);
     }
-
-    vec3 final_color = main_payload.color;
 
     vec3 ao_color = vec3(0.0);
 
@@ -101,9 +105,9 @@ void main() {
             float random_x = random(in_uv * 2.0292312) * 2.0 - 1.0;
             float random_y = random(in_uv * 4.1203922) * 2.0 - 1.0;
 
-            vec3 ao_sample_direction = randomHemispherePoint(vec2(random_x, random_y), main_payload.normal);
+            vec3 ao_sample_direction = random_hemisphere_point(vec2(random_x, random_y), main_payload.normal);
 
-            traceRayEXT(scene_as, ray_flags, cull_mask, 1u, 0u, 0u, ao_sample_origin, FLT_MIN, ao_sample_direction, 1.0, 1);
+            traceRayEXT(scene_as, ray_flags, cull_mask, 1u, 0u, 0u, ao_sample_origin, FLT_MIN, ao_sample_direction, 4.0, 1);
 
             ao_color += vec3(ao_payload.t);
         }
@@ -111,5 +115,5 @@ void main() {
 
     ao_color /= AO_SPP;
 
-    imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(final_color - ao_color, 1.0));
+    imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(ao_color, 1.0));
 }
